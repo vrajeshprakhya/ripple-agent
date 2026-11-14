@@ -1,0 +1,65 @@
+{
+  "overall": {
+    "n": 60,
+    "truncated": 0,
+    "transport_errors": 0,
+    "valid": 45,
+    "strict_format": 45,
+    "correct_within_tolerance": 45,
+    "correct_tight": 35,
+    "median_rel_error": 8.046413344604701e-07,
+    "median_abs_error_db_deg": 8.026460132981583e-06,
+    "design_success": 10,
+    "design_constraint_ok": 10,
+    "design_n": 10
+  },
+  "by_category": {
+    "design": {
+      "n": 10,
+      "truncated": 0,
+      "transport_errors": 0,
+      "valid": 10,
+      "strict_format": 10,
+      "correct_within_tolerance": 10,
+      "correct_tight": 0,
+      "median_rel_error": null,
+      "median_abs_error_db_deg": null,
+      "design_success": 10,
+      "design_constraint_ok": 10,
+      "design_n": 10
+    },
+    "out_of_range": {
+      "n": 15,
+      "truncated": 0,
+      "transport_errors": 0,
+      "valid": 15,
+      "strict_format": 15,
+      "correct_within_tolerance": 15,
+      "correct_tight": 15,
+      "median_rel_error": 4.814393938546711e-07,
+      "median_abs_error_db_deg": 6.432977890824532e-06
+    },
+    "unseen_config": {
+      "n": 15,
+      "truncated": 0,
+      "transport_errors": 0,
+      "valid": 0,
+      "strict_format": 0,
+      "correct_within_tolerance": 0,
+      "correct_tight": 0,
+      "median_rel_error": null,
+      "median_abs_error_db_deg": null
+    },
+    "unseen_values": {
+      "n": 20,
+      "truncated": 0,
+      "transport_errors": 0,
+      "valid": 20,
+      "strict_format": 20,
+      "correct_within_tolerance": 20,
+      "correct_tight": 20,
+      "median_rel_error": 1.1836125839191298e-05,
+      "median_abs_error_db_deg": 9.619942375138635e-06
+    }
+  }
+}
