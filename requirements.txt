@@ -1,3 +1,6 @@
 # Runtime dependencies, pinned to what this agent was verified against.
 strands-agents[openai]==1.65.0
 strands-agents-tools==0.9.0
+# Imported directly by ngspice_mcp (also a transitive dependency of strands). The v2
+# line renamed FastMCP to MCPServer, so a v1 pin would break the server.
+mcp==2.3.0

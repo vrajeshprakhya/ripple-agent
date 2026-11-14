@@ -27,6 +27,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      - name: Install ngspice
+        # The ngspice tests skip without it; installing it makes them run for real,
+        # including the closed-form checks and the hostile-netlist tests.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ngspice
+
       - name: Test
         # The suite is offline by design, so no OpenRouter key is configured
         # here. A key in CI would mean every push spends real credit.

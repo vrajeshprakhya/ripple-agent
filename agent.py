@@ -21,6 +21,7 @@ import pathlib
 import sys
 
 import mcp_kicad
+import mcp_spice
 from strands import Agent, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models.openai import OpenAIModel
@@ -482,6 +483,26 @@ def main() -> int:
         help="server log verbosity; info prints a line per tool group to stderr",
     )
     g.add_argument("--node", default="node", help="node binary to launch the server with")
+    s = ap.add_argument_group("ngspice MCP server")
+    s.add_argument(
+        "--spice",
+        action="store_true",
+        help="attach this repo's ngspice MCP server (board-level SPICE analysis)",
+    )
+    s.add_argument(
+        "--spice-root",
+        action="append",
+        metavar="DIR",
+        help="directory the server may read netlists from and write under; repeatable "
+        "(default: the sandbox root)",
+    )
+    s.add_argument(
+        "--spice-tool",
+        action="append",
+        metavar="NAME",
+        help="narrow to these tool names, without the spice_ prefix (run_ac, not spice_run_ac)",
+    )
+    s.add_argument("--ngspice", metavar="PATH", help="ngspice binary (default: auto-detect)")
     ap.add_argument(
         "--trace-tools",
         action="store_true",
@@ -525,6 +546,30 @@ def main() -> int:
                 f"(mode={args.kicad_mode}, toolboxes={args.kicad_toolboxes})",
                 file=sys.stderr,
             )
+
+        if args.spice:
+            try:
+                sclient = mcp_spice.spice_mcp_client(
+                    args.spice_root or [SANDBOX_ROOT],
+                    ngspice=args.ngspice,
+                    allowed_tools=args.spice_tool,
+                )
+            except mcp_spice.SpiceServerError as e:
+                print(f"spice mcp: {e}", file=sys.stderr)
+                return 2
+            stack.enter_context(sclient)
+            spice_tools = sclient.list_tools_sync()
+            if not spice_tools:
+                hint = (
+                    " --spice-tool matches the server's own names WITHOUT the 'spice_' "
+                    "prefix (run_ac, not spice_run_ac)."
+                    if args.spice_tool
+                    else ""
+                )
+                print(f"spice mcp: server exposed 0 tools.{hint}", file=sys.stderr)
+                return 2
+            extra_tools.extend(spice_tools)
+            print(f"spice mcp: {len(spice_tools)} tools", file=sys.stderr)
 
         tracer = ToolTracer() if args.trace_tools else None
         agent, tap = build_agent(

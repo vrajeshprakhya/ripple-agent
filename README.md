@@ -126,7 +126,7 @@ long sessions stay bounded in both context and cost.
 ./.venv/bin/python -m pytest tests -q
 ```
 
-83 tests, entirely offline: no network, no API key, no KiCad, no Node, no MCP server, so
+About 250 tests, offline: no network, no API key, no KiCad, no Node (the ngspice ones need ngspice and skip without it), so
 they cost nothing and run in CI on every push. They cover sandbox escape refusal
 (including via symlink), calculator safety, key-loading precedence, the usage-reporting
 fallback, the KiCad server validation and mode handling, and the tool tracer. The live
@@ -310,6 +310,89 @@ single-cell protection circuit, and run ERC. Each stage is a fresh agent so one 
 cannot poison the next, and it refuses to run in any path matching `bq_vboard`,
 `bms_vboard` or `_evidence`. It is a measurement of where the model succeeds and fails,
 not a way to produce a design worth fabricating.
+
+## ngspice MCP server
+
+`ngspice_mcp/` is this repo's own MCP server for board-level SPICE analysis, built because
+the open-source options were unlicensed (`gtnoble/ngspice-mcp`, `ghensley/circuit-sim-mcp`)
+or GPL-3.0 with an `mcp<2` pin that conflicts with this environment (`clanker-lover/spicebridge`),
+and `spice2rnm` contains no MCP server to reuse. It wraps whatever ngspice is installed
+(`NGSPICE_BIN`, then `~/ngspice-install/bin/ngspice`, then `PATH`) and runs over stdio.
+
+```bash
+./run.sh --spice --spice-root ~/boards "run an AC sweep of /path/to/board.cir"
+./run.sh --spice --spice-tool run_ac --spice-tool measure "..."      # narrow the manifest
+./run.sh --kicad ~/KiCAD-MCP-Server --spice "wire it, then simulate it"   # both servers
+```
+
+| Tool | Does |
+|---|---|
+| `run_op` | Operating point: every node voltage and source current |
+| `run_dc_sweep` | Sweep a source, with a downsampled table |
+| `run_ac` | AC sweep: dB and phase, plus the -3 dB frequency of each probe |
+| `run_transient` | Transient: per-probe statistics and a downsampled waveform |
+| `get_vector`, `measure` | Fetch or derive numbers from an earlier run by `result_id` (bandwidth, 10-90 rise time, rms, ...) |
+| `check_netlist` | Validate without simulating |
+| `export_kicad_netlist` | `kicad-cli` schematic to SPICE netlist, inside the roots |
+
+Probes accept ngspice's differential form (`v(/srp,/srn)`), which board-level transfer
+functions usually need. Results stay in server memory under a short id, so a long waveform
+never has to pass through the model's context. The manifest is 8 tools; with the 4 local
+ones that is about 1.9k tokens per turn.
+
+### Why the model never writes a control block
+
+ngspice's `.control` language can run shell commands, read and write arbitrary files and load
+shared objects, so a netlist written by a model, or by text the model has read, is effectively
+code. The design is that the model supplies only a circuit:
+
+- Every dot-directive must be on a short allowlist. Analysis cards are stripped (so a KiCad
+  export carrying its own `.op` still works) and `.control` is refused in any case or spacing.
+- The `.control` block ngspice runs is always built by the server, from numbers and names that
+  match strict patterns, so a probe like `v(out); shell id` is refused.
+- `.include` and `.lib` are honoured only for files under the configured roots, resolved
+  through symlinks, with a suffix allowlist. **The included file's contents are scanned too**,
+  recursively and with a depth limit, because ngspice splices an included file into the deck
+  and a `.control` block inside it would run. Being under a root does not make content trusted.
+- Python and ngspice disagree about what a line break is (`\x0c`, `\x85`, ` ` ...). A
+  checker built on a different split than the consumer is how a directive gets hidden, so
+  those characters are refused outright.
+- ngspice runs in a throwaway directory with a scrubbed environment, CPU, memory and file-size
+  limits, and a wall-clock timeout that kills the process group.
+
+**This narrows the attack surface; it is not a sandbox.** There is no network isolation and
+no separate user, and there is a small window between the scan of an included file and
+ngspice reading it. Do not point `--spice-root` at a directory a hostile party can write to.
+The KiCad server is *not* confined by these roots.
+
+Two failure modes found while testing are worth knowing, because both would have misled a model:
+
+- ngspice reports a malformed component as a **warning**, drops it, and simulates the rest.
+  The "operating point" returned was its built-in constants table (`pi`, `boltz`, `kelvin`).
+  Warnings that mean "ignored" or "not a valid" are now failures, and the result's plot type
+  must match the analysis asked for.
+- The MCP SDK hides the text of any exception it does not recognise, so every refusal arrived
+  as "Error executing tool run_op". Deliberate failures are now raised as `ToolError`, the
+  one type whose message reaches the model.
+
+### Checked against a real board
+
+`~/bq_vboard_evidence/kicad/bms_6s_fab.cir`, the KiCad export of a 6S BMS, copied to a
+scratch directory and compared with that project's own logged testbench results.
+
+| | Logged reference | These tools, no model involved |
+|---|---|---|
+| Cell 1 voltage | 3.688 V | 3.6880 V |
+| Shunt voltage | 1.00002 mV | 1.00002 mV |
+| Kelvin-filter corner | 7957.74 Hz | 7956.9 Hz (0.01% off: interpolation at 20 points per decade) |
+
+Then Ripple 65B was asked for the same quantities, three times. It made 2 or 3 tool calls per
+run at about $0.0004 to $0.0007, and **got the cell voltage (3.688 V) and the corner
+(7.957 kHz) right every time. It got the shunt current wrong every time**: it reported
+"1.00002 mA" where 1.00002 mV across 1 mOhm is 1.00002 **A**. The simulator's number was
+right; the model divided it itself, never used its `calculate` tool, and attached the wrong
+unit. Treat a model's unit labels on derived quantities as unverified even when every number
+it was handed was correct.
 
 ## Caveats
 
