@@ -23,6 +23,7 @@ import sys
 import mcp_emverify
 import mcp_kicad
 import mcp_openems
+import mcp_pcb
 import mcp_spice
 from strands import Agent, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
@@ -528,6 +529,12 @@ def main() -> int:
         metavar="NAME",
         help="narrow to these tool names as listed, e.g. openems_create_microstrip; repeatable",
     )
+    pg = ap.add_argument_group("PCB EMC review server (third party, AGPL-3.0, locally patched)")
+    pg.add_argument("--pcb", metavar="DIR", help="path to an installed mcp-pcb-emcopilot (see mcp_pcb.py)")
+    pg.add_argument("--pcb-profile", choices=mcp_pcb.PROFILES, default="core",
+                    help="core: 18 read-only tools (~3k tokens); all: 131 tools (~20k tokens per turn)")
+    pg.add_argument("--pcb-tool", action="append", metavar="NAME",
+                    help="attach exactly these tools as listed (pcb_calc_...); overrides the profile")
     v = ap.add_argument_group("validated full-wave server (this repo)")
     v.add_argument("--emverify", action="store_true",
                    help="attach the validated openEMS microstrip checker (needs openEMS built; see README)")
@@ -621,6 +628,21 @@ def main() -> int:
                 return 2
             extra_tools.extend(em_tools)
             print(f"openems mcp: {len(em_tools)} tools", file=sys.stderr)
+
+        if args.pcb:
+            try:
+                pclient = mcp_pcb.pcb_mcp_client(args.pcb, profile=args.pcb_profile, allowed_tools=args.pcb_tool)
+            except mcp_pcb.PcbServerError as err:
+                print(f"pcb mcp: {err}", file=sys.stderr)
+                return 2
+            stack.enter_context(pclient)
+            pcb_tools = pclient.list_tools_sync()
+            if not pcb_tools:
+                print("pcb mcp: server exposed 0 tools. --pcb-tool matches names exactly as listed "
+                      "(pcb_calc_microstrip_impedance).", file=sys.stderr)
+                return 2
+            extra_tools.extend(pcb_tools)
+            print(f"pcb mcp: {len(pcb_tools)} tools (profile={args.pcb_profile})", file=sys.stderr)
 
         if args.emverify:
             vclient = mcp_emverify.emverify_mcp_client(

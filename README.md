@@ -497,14 +497,38 @@ width re-simulated independently): **3 of 5 were correct** (1.6 mm gave 51.9 ohm
 call. The tool's numbers are right in every case checked; the model's use of them is the
 unreliable part. Each simulation takes roughly 10 to 60 seconds.
 
-### What is not here
+### PCB EMC review server (third party, locally patched): `--pcb`
 
-**`mcp-pcb-emcopilot`** was the intended companion, and is not integrated. The author's
-repository returns 404 (listings call it private), and the only public copy is under a different
-account (`Yverr0y/mcp-pcb-emcopilot`) whose provenance cannot be verified from git alone. Reading
-it turned up an `eval()` in its Gerber parser (`gerber_parser.py:127`) running on text from the
-file with empty `__builtins__`, which is a known-escapable pattern and a real concern for files
-that come from outside. Nothing from it was installed or run.
+`mcp_pcb.py` launches `mcp-pcb-emcopilot` (AGPL-3.0) as a separate process. **Provenance:** the
+author's repository (`RFingAdam/mcp-pcb-emcopilot`) is not public (it returns 404). The code used
+is a public copy under another account (`Yverr0y/...`) at `b3f1895`, whose origin cannot be verified
+from git alone (author names in commits are self-asserted), plus one local commit. Nothing from it
+is copied into this repo; the install steps are at the top of `mcp_pcb.py`.
+
+**The local patch.** The published Gerber parser passes aperture-macro expressions from the file to
+`eval()` with emptied builtins, which is escapable. I proved it before patching: a macro carrying a
+payload created a file when merely parsed, on the unpatched code. The patch replaces the `eval`
+with an arithmetic-only AST walker (numbers, `+ - * /`, parentheses, unary signs, 200 characters
+at most). The same payload then does nothing, legitimate arithmetic still evaluates, and the
+project's own 119 Gerber tests pass. `tests/test_mcp_pcb.py` keeps both halves as regression tests,
+so a reinstall from upstream without the patch fails loudly. Use Python 3.14 for its venv: the
+default tar extraction filter there blocks symlink and path-escape members in the ODB++ reader.
+
+**Manifest.** 131 tools is about 20k tokens a turn, so `--pcb` attaches an 18-tool read-only `core`
+profile (about 2.1k tokens) unless `--pcb-profile all` or `--pcb-tool NAME` says otherwise. It
+leaves out tools that write to a path the model chooses, the openEMS bridge (replaced by the
+validated `emverify` server), and three tools whose output is addressed to the model as
+instructions (`pcb_lookup_limit_live` returns "a deferred next-action Claude should execute").
+Like the KiCad server it reads any path it is given, so use it on boards you trust.
+
+**Checked, not trusted.** Its microstrip impedance calculator against my validated full-wave
+simulation: 3.0 mm on 1.6 mm FR-4 -1.2%, 1.2 mm on 0.8 mm +0.3%, 2.0 mm on 1.0 mm at epsilon_r 10.2
++0.1%, and 0.4 mm on 0.2 mm -4.4% (partly a modelling difference: the server includes 35 um copper
+thickness and my simulation uses a zero-thickness strip). Asked to parse a four-layer KiCad fixture
+and report counts, Ripple matched an independent s-expression count on layers, components, vias and
+segments in 3 of 3 runs. Nets differed by one: the server counts KiCad's unconnected net 0, which I
+excluded, so that is a definition and not an error. **One genuine tool quirk:** `layer_count` says 5
+on a board with 4 copper layers; the stackup is correct, so read the stackup.
 
 ## Caveats
 
