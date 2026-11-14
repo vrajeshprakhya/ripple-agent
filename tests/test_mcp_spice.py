@@ -274,6 +274,68 @@ def test_every_analysis_result_states_its_units(live):
         assert "SI base units" in _json(text)["units"], name
 
 
+SHUNT = "shunt\nI1 0 a DC 1\nR1 a 0 0.001\nV9 b 0 DC 3.688\nRL b 0 1k\n"  # 1 A through 1 mohm
+
+
+@needs_ngspice
+def test_derived_shunt_current_comes_back_in_amperes_ready_made(live):
+    # The exact failure: 1 mV across a 1 mohm shunt, reported as milliamperes.
+    client, _ = live
+    status, text = _call(client, "run_op", netlist=SHUNT,
+                         derived={"shunt_current": "v(a) / 1 mohm", "cell": "v(b)"})
+    assert status == "success", text
+    d = _json(text)["derived"]
+    assert d["shunt_current"]["unit"] == "A"
+    assert d["shunt_current"]["display"] == "1 A"
+    assert d["cell"]["display"] == "3.688 V"
+
+
+@needs_ngspice
+def test_derived_works_with_a_differential_reference(live):
+    client, _ = live
+    status, text = _call(client, "run_op", netlist="d\nVS in 0 DC 5\nR1 in mid 1k\nR2 mid 0 1k\n",
+                         derived={"i": "v(in,mid) / 1 kohm"})
+    assert status == "success", text
+    assert _json(text)["derived"]["i"]["display"] == "2.5 mA"
+
+
+@needs_ngspice
+def test_op_without_derived_has_no_derived_key(live):
+    client, _ = live
+    status, text = _call(client, "run_op", netlist=SHUNT)
+    assert status == "success" and "derived" not in _json(text)
+
+
+@needs_ngspice
+def test_a_bad_derived_expression_fails_the_whole_call_with_its_reason(live):
+    client, _ = live
+    status, text = _call(client, "run_op", netlist=SHUNT, derived={"x": "v(a) + 1 A"})
+    assert status == "error" and "cannot combine" in text
+
+
+@needs_ngspice
+def test_a_derived_reference_to_an_unknown_node_is_refused(live):
+    client, _ = live
+    status, text = _call(client, "run_op", netlist=SHUNT, derived={"x": "v(nope) / 1 ohm"})
+    assert status == "error" and "no vector" in text
+
+
+@needs_ngspice
+@pytest.mark.parametrize("label", ["", "1x", "a b", "x;y", "a" * 50, "x-y"])
+def test_derived_names_must_be_plain_identifiers(live, label):
+    client, _ = live
+    status, text = _call(client, "run_op", netlist=SHUNT, derived={label: "v(a) / 1 ohm"})
+    assert status == "error" and "plain identifier" in text
+
+
+@needs_ngspice
+def test_too_many_derived_quantities_are_refused(live):
+    client, _ = live
+    status, text = _call(client, "run_op", netlist=SHUNT,
+                         derived={f"q{i}": "v(a) / 1 ohm" for i in range(13)})
+    assert status == "error" and "at most 12" in text
+
+
 @needs_ngspice
 def test_unknown_result_id_is_a_clear_error(live):
     client, _ = live

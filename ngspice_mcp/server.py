@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import subprocess
 import uuid
 from collections import OrderedDict
@@ -127,6 +128,25 @@ UNIT_NOTE = ("every value is in SI base units: v(...) in volts, i(...) in ampere
              "frequency in hertz. 0.001 in a v() vector is one millivolt, not one volt.")
 
 
+def _resolver(r: core.RunResult):
+    """A function that reads a v(...) or i(...) value out of an operating-point result."""
+
+    def resolve(name: str) -> float:
+        if name in r.vectors:
+            return _real(r.vectors[name][0])
+        if name.startswith("v(") and "," in name:  # v(a,b) is v(a) - v(b)
+            a, b = name[2:-1].split(",", 1)
+            if f"v({a})" in r.vectors and f"v({b})" in r.vectors:
+                return _real(r.vectors[f"v({a})"][0]) - _real(r.vectors[f"v({b})"][0])
+        raise SpiceError(f"no vector {name!r} in that result")
+
+    return resolve
+
+
+MAX_DERIVED = 12
+_LABEL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
+
+
 @_tool
 def compute(expression: str, result_id: str | None = None) -> dict:
     """Unit-aware arithmetic. Use this for ANY derived quantity instead of calculating in your head.
@@ -146,16 +166,7 @@ def compute(expression: str, result_id: str | None = None) -> dict:
         r = _get(result_id)
         if r.analysis != "op":
             raise SpiceError("vector references need an operating-point (run_op) result")
-
-        def resolve(name: str) -> float:
-            if name in r.vectors:
-                return _real(r.vectors[name][0])
-            if name.startswith("v(") and "," in name:  # v(a,b) is v(a) - v(b)
-                a, b = name[2:-1].split(",", 1)
-                if f"v({a})" in r.vectors and f"v({b})" in r.vectors:
-                    return _real(r.vectors[f"v({a})"][0]) - _real(r.vectors[f"v({b})"][0])
-            raise SpiceError(f"no vector {name!r} in that result")
-
+        resolve = _resolver(r)
     return units.compute(expression, resolve)
 
 
@@ -167,12 +178,33 @@ def check_netlist(netlist: str | None = None, netlist_path: str | None = None) -
 
 
 @_tool
-def run_op(netlist: str | None = None, netlist_path: str | None = None) -> dict:
-    """DC operating point. Returns every node voltage and source current."""
+def run_op(netlist: str | None = None, netlist_path: str | None = None,
+           derived: dict[str, str] | None = None) -> dict:
+    """DC operating point. Returns every node voltage and source current, and any derived quantities.
+
+    Ask for the numbers you actually need with `derived`, a mapping from a name you choose to a
+    unit-aware expression over the result, and read them back ready-made with their unit attached:
+        derived={"cell1": "v(/vc1f,/vc0f)", "shunt_current": "(v(/srp) - v(/srn)) / 1 mohm"}
+    returns derived.cell1.display = "3.688 V" and derived.shunt_current.display = "1.00002 A".
+    Use those "display" strings as they are rather than dividing or relabelling the raw values:
+    volts over ohms is amperes, and a bare 0.001 is a millivolt, not a milliampere.
+    """
+    from . import units
+
+    labels = derived or {}
+    if len(labels) > MAX_DERIVED:
+        raise SpiceError(f"at most {MAX_DERIVED} derived quantities per run")
+    for label in labels:
+        if not _LABEL.match(label):
+            raise SpiceError(f"derived name {label!r} must be a plain identifier such as shunt_current")
     clean, notes = _circuit(netlist, netlist_path)
     r = core.run_ngspice(clean, "op", {}, [])
     values = {k: _real(v[0]) for k, v in r.vectors.items()}
-    return {"result_id": _store(r), "values": values, "units": UNIT_NOTE, "notes": notes + r.notes}
+    out = {"result_id": _store(r), "values": values, "units": UNIT_NOTE, "notes": notes + r.notes}
+    if labels:
+        resolve = _resolver(r)
+        out["derived"] = {label: units.compute(expr, resolve) for label, expr in labels.items()}
+    return out
 
 
 @_tool
