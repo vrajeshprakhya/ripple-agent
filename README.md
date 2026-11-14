@@ -213,7 +213,7 @@ Ripple 65B, `write` / `core`, KiCad 9.0.8, server v2.9.0. Whole probe cost about
 | 1. Enumerate tools | Answered |
 | 2. Create project | **Worked**: one `kicad_create_project` call wrote the four project files |
 | 3. Place 5 library parts | **Worked**: 5 `kicad_add_schematic_component` calls, correct nested arguments, designators BAT1/R1/T1/Q1/C1, all five symbols present in the file |
-| 4. Wire the circuit | **Failed, reproducibly** (4 runs): no tool call, claiming the path is outside its sandbox or that it has no tools. Wiring tools do exist in `core` |
+| 4. Wire the circuit | **Failed on the open-ended prompt (4 of 4 runs), worked once the pins and nets were spelled out** (see below) |
 | 5. Run ERC | **Failed on `core`, worked on a narrow manifest** (see below) |
 
 **The server writes KiCad 10 format** (`version 20260101`, `generator_version "10.0"`,
@@ -242,10 +242,40 @@ What this does and does not show:
 - **Manifest size matters for ERC.** `kicad_run_erc` lives only in the `all` toolbox, so
   `core` genuinely lacks it. The model did not call `kicad_search_tools` or
   `kicad_open_toolbox` to find it, but used it as soon as it was in front of it.
-- **The wiring refusal is not about tools or sandbox.** It persists with 5 relevant tools
-  and with a prompt that exempts MCP tools from the sandbox, and in the same run the model
-  used `list_directory` on that very path for ERC. Cause unknown: the request may simply
-  be underspecified for this model (no pin numbers or net names).
+- **The wiring refusal is not about tools or sandbox.** It persisted with 5 relevant tools
+  and with a prompt that exempts MCP tools from the sandbox, and the model used
+  `list_directory` on that very path in the ERC run. The stated reasons ("outside the
+  sandbox", "no tools") were simply false, so the model's account of its own refusal cannot
+  be trusted; the real cause was found by experiment instead.
+
+### Why wiring failed: the task, not the tools
+
+Same schematic, same 5-tool manifest, three prompts of increasing specificity:
+
+| Prompt | Result |
+|---|---|
+| "List the components" | 1 call, correct |
+| "Connect pin 1 of C1 to net VBAT" | 1 call to `kicad_connect_to_net`, correct |
+| Every pin and net spelled out (11 connections) | **23 calls, all 11 connections made** |
+
+The original prompt ("wire it as a single-cell protection circuit: cell positive to the
+load through the NMOS FET...") asks the model to design the topology, name the nets,
+choose the pins and then drive the tools. It declined to start. When the design was
+supplied, it did the execution well: it guessed Q1's pin names wrong twice (`1/2/3`, then
+`Drain/Gate/Source`), read the schematic file when the tool errors showed it was wrong,
+found the real names (`D`/`G`/`S`), and finished.
+
+Verified independently, not from the model's own report: KiCad's exported netlist matches
+the requested nets exactly (VBAT = BAT1/1, C1/1, Q1/D, T1/1; BATN = BAT1/2, C1/2, R1/1,
+T1/2; GATE = Q1/G; LOAD = Q1/S; GND = R1/2), and ERC fell from 17 violations to 9. The
+remaining nine are 5 missing-symbol-library warnings (a server setup issue, no
+`sym-lib-table`), 3 single-pin labels (GATE, LOAD and GND each have one pin, a property of
+the requested netlist) and 1 undriven gate. The tool's `autoSave: skipped` warning was
+misleading: the file on disk was written.
+
+Cost of the explicit run was 23 tool calls and 125k input tokens (about $0.0034), since
+the growing history is re-sent on every call. Treat "Ripple can execute a given design but
+not originate one" as a hypothesis supported by one clean contrast, not a finding.
 - Small samples throughout. This is an anecdote, not a benchmark.
 
 `--kicad-tool` matches the server's own tool names **without** the `kicad_` prefix
