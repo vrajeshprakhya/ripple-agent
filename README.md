@@ -213,7 +213,7 @@ Ripple 65B, `write` / `core`, KiCad 9.0.8, server v2.9.0. Whole probe cost about
 | 1. Enumerate tools | Answered |
 | 2. Create project | **Worked**: one `kicad_create_project` call wrote the four project files |
 | 3. Place 5 library parts | **Worked**: 5 `kicad_add_schematic_component` calls, correct nested arguments, designators BAT1/R1/T1/Q1/C1, all five symbols present in the file |
-| 4. Wire the circuit | **Failed on the open-ended prompt (4 of 4 runs), worked once the pins and nets were spelled out** (see below) |
+| 4. Wire the circuit | **Refused 4 of 4 with no pin-discovery tool in the manifest; attempts it every time once one is present, though open-ended designs come out wrong** (see below) |
 | 5. Run ERC | **Failed on `core`, worked on a narrow manifest** (see below) |
 
 **The server writes KiCad 10 format** (`version 20260101`, `generator_version "10.0"`,
@@ -242,41 +242,63 @@ What this does and does not show:
 - **Manifest size matters for ERC.** `kicad_run_erc` lives only in the `all` toolbox, so
   `core` genuinely lacks it. The model did not call `kicad_search_tools` or
   `kicad_open_toolbox` to find it, but used it as soon as it was in front of it.
-- **The wiring refusal is not about tools or sandbox.** It persisted with 5 relevant tools
-  and with a prompt that exempts MCP tools from the sandbox, and the model used
-  `list_directory` on that very path in the ERC run. The stated reasons ("outside the
-  sandbox", "no tools") were simply false, so the model's account of its own refusal cannot
-  be trusted; the real cause was found by experiment instead.
+- **The wiring refusal was not about the sandbox, and was only half wrong about tools.**
+  "Outside the sandbox" was false (the model listed that very directory in the ERC run).
+  But "I have no tool that shows pin names" was TRUE: `list_schematic_components` reports
+  pin counts only, and the 5-tool manifest held no pin-discovery tool. An earlier version of
+  this README called all of its stated reasons false; that was an overreach. The cause was
+  found by experiment, below.
 
-### Why wiring failed: the task, not the tools
+### Why wiring failed, and what Ripple can and cannot do (revised)
 
-Same schematic, same 5-tool manifest, three prompts of increasing specificity:
+An earlier version of this section concluded "the task, not the tools": that Ripple can
+execute a given design but not originate one. That was wrong about the cause, and the
+data that overturned it follows.
 
-| Prompt | Result |
-|---|---|
-| "List the components" | 1 call, correct |
-| "Connect pin 1 of C1 to net VBAT" | 1 call to `kicad_connect_to_net`, correct |
-| Every pin and net spelled out (11 connections) | **23 calls, all 11 connections made** |
+The first explicit-pins run (23 calls) looked like a clean contrast with the open-ended
+refusals, but its manifest differed from the refused runs in a way I had not controlled:
+it let the model fall back on reading the schematic file for pin names. The ladder below
+holds the manifest constant: 6 KiCad tools (`list_schematic_components`,
+`list_symbol_pins`, `get_schematic_pin_locations`, `connect_to_net`,
+`add_schematic_net_label`, `add_schematic_wire`) plus the 4 local ones, about 1.7k tokens
+per turn. Twelve runs, each from a fresh copy of the same unwired five-part template,
+scored by `demo/score_netlist.py` against KiCad's own exported netlist, never the model's
+report. `demo/wiring_ladder.sh` reproduces it.
 
-The original prompt ("wire it as a single-cell protection circuit: cell positive to the
-load through the NMOS FET...") asks the model to design the topology, name the nets,
-choose the pins and then drive the tools. It declined to start. When the design was
-supplied, it did the execution well: it guessed Q1's pin names wrong twice (`1/2/3`, then
-`Drain/Gate/Source`), read the schematic file when the tool errors showed it was wrong,
-found the real names (`D`/`G`/`S`), and finished.
+| Level | The prompt supplies | Perfect (9/9) | Notes |
+|---|---|---|---|
+| A | every connection, with net names and roles ("BAT1 positive -> VBAT") | 3 of 3 | 17 calls each |
+| B | net membership ("VBAT joins the positive terminal of BAT1, the drain of Q1...") | 3 of 3 | 17 calls each |
+| C | net names plus a prose topology ("Q1 is the high-side FET between VBAT and LOAD...") | 2 of 3 | C1 made 5 calls, wired nothing |
+| D | only the original open-ended prompt | **0 of 3** | 16 calls each, all wrong |
 
-Verified independently, not from the model's own report: KiCad's exported netlist matches
-the requested nets exactly (VBAT = BAT1/1, C1/1, Q1/D, T1/1; BATN = BAT1/2, C1/2, R1/1,
-T1/2; GATE = Q1/G; LOAD = Q1/S; GND = R1/2), and ERC fell from 17 violations to 9. The
-remaining nine are 5 missing-symbol-library warnings (a server setup issue, no
-`sym-lib-table`), 3 single-pin labels (GATE, LOAD and GND each have one pin, a property of
-the requested netlist) and 1 undriven gate. The tool's `autoSave: skipped` warning was
-misleading: the file on disk was written.
+Levels A to C cost about $0.0003 to $0.0005 per run: one `list_schematic_components`, five
+`get_schematic_pin_locations`, eleven `connect_to_net`. No run read the schematic file.
+The pin-discovery tool is what the model reached for every time.
 
-Cost of the explicit run was 23 tool calls and 125k input tokens (about $0.0034), since
-the growing history is re-sent on every call. Treat "Ripple can execute a given design but
-not originate one" as a hypothesis supported by one clean contrast, not a finding.
-- Small samples throughout. This is an anecdote, not a benchmark.
+**Level D is the finding.** With the same pin-discovery tools, the open-ended prompt that
+was refused 4 of 4 times earlier is now attempted every time. But the designs are wrong:
+
+- D1 and D3 put the FET source and the shunt's free pin on one net called `LOAD`, so the
+  load's two terminals are the same node.
+- D2 put the FET source on the cell's negative net, which puts the FET across the cell.
+
+So: **given net names it executes reliably (8 of 9); asked to originate the topology it
+completes the job and gets it wrong (0 of 3).** That resembles the earlier hypothesis but
+for a different reason: the refusals were a missing tool, and the real limitation is design
+correctness.
+
+How the scorer was tightened, because it matters for trust: the first rubric had 8 checks
+and gave D1 and D3 a 7/8, missing that merged load terminals are a design error. A ninth
+check ("load terminals on different nets") was added, with regression tests built from
+these two runs, and every trial was re-scored under it. A to C are unaffected. A floating
+gate is not counted as a defect at level D, because that prompt never asked for gate drive.
+
+Caveats: 12 runs, one model, one small circuit, one temperature. The scorer encodes one
+reading of the prompt, though the three level D designs are wrong by inspection, not
+merely different. The first explicit run's observation that Ripple guessed Q1's pin names
+wrong twice before reading the file is explained by the missing discovery tool, not by any
+reasoning failure.
 
 `--kicad-tool` matches the server's own tool names **without** the `kicad_` prefix
 (`run_erc`, not `kicad_run_erc`). A filter matching nothing now exits with an error
