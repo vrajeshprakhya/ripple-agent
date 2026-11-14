@@ -462,6 +462,41 @@ The analytical tools (impedance, effective permittivity, delay) are unaffected a
 against Hammerstad above. What this means in practice: use the design tools, and treat any
 S-parameters from the generated scripts as unverified until they pass a power-balance check.
 
+### The validated full-wave server (this repo): `--emverify`
+
+Because the generated scripts fail the energy test, `emverify_mcp/` provides a fixed, validated
+simulation instead: `simulate_microstrip` takes four numbers (trace width, substrate height,
+relative permittivity, top frequency) and never a script, runs openEMS under the Python that has
+the bindings, and returns the full-wave impedance, effective permittivity and delay beside the
+analytical Hammerstad values and the percentage difference. **A result that breaks energy
+conservation is refused rather than reported.** `./run.sh --emverify "..."`; the solver Python is
+`EMVERIFY_PYTHON`, default `~/mcp-openems/.venv/bin/python`.
+
+The simulation code is original, written against the openEMS API after reading how the official
+tutorial gets a clean result; no tutorial code is copied, because openEMS is GPL-3.0.
+
+Getting it right took two fixes, both found by comparing against theory:
+
+- **The measurement plane has to clear the source.** First version: probe 0.6 mm from the feed,
+  effective permittivity 5.7 on a 4.2 substrate (impossible), Z0 67.5 ohm against 51.7, power
+  balance 0.75 to 0.81. Moving the probe well past the source gave 50.66 ohm, 3.236, 0.998 to 1.001.
+- **Mesh sizing must resolve the strip, not only the wavelength.** A 1.2 mm trace was 4.3% off in
+  impedance and 6.6% in effective permittivity; sizing the fine mesh by strip width and substrate
+  height as well brought those to 2.7% and 0.8%.
+
+Final accuracy against Hammerstad on four geometries (strips 0.4 to 3 mm, epsilon_r 3.4 to 10.2):
+impedance within 2.7%, effective permittivity within 2.0%, every line matched (S11 below -46 dB),
+power balance 0.987 to 1.001. Refining the mesh took one case from 2% to 0.2%, so that gap was
+discretization, not disagreement with theory. The "agrees with theory" flag uses a 5% tolerance,
+about double the worst case observed, which is four geometries and not a proof for others.
+
+**With Ripple driving it** (five runs of "find a 50 ohm width on 0.8 mm, er 3.66", each recommended
+width re-simulated independently): **3 of 5 were correct** (1.6 mm gave 51.9 ohm, 1.7 mm 50.1,
+1.71 mm 49.9). One tried a single width and estimated the rest; one recommended 3.0 mm, which is
+34.6 ohm, and the cause is not yet known. A separate attempt hit the token limit before making any
+call. The tool's numbers are right in every case checked; the model's use of them is the
+unreliable part. Each simulation takes roughly 10 to 60 seconds.
+
 ### What is not here
 
 **`mcp-pcb-emcopilot`** was the intended companion, and is not integrated. The author's

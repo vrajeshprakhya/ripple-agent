@@ -20,6 +20,7 @@ import os
 import pathlib
 import sys
 
+import mcp_emverify
 import mcp_kicad
 import mcp_openems
 import mcp_spice
@@ -527,6 +528,13 @@ def main() -> int:
         metavar="NAME",
         help="narrow to these tool names as listed, e.g. openems_create_microstrip; repeatable",
     )
+    v = ap.add_argument_group("validated full-wave server (this repo)")
+    v.add_argument("--emverify", action="store_true",
+                   help="attach the validated openEMS microstrip checker (needs openEMS built; see README)")
+    v.add_argument("--emverify-python", metavar="PATH",
+                   help="Python that can import openEMS (default ~/mcp-openems/.venv/bin/python)")
+    v.add_argument("--emverify-tool", action="append", metavar="NAME",
+                   help="narrow to these tool names, without the emverify_ prefix; repeatable")
     ap.add_argument(
         "--trace-tools",
         action="store_true",
@@ -613,6 +621,18 @@ def main() -> int:
                 return 2
             extra_tools.extend(em_tools)
             print(f"openems mcp: {len(em_tools)} tools", file=sys.stderr)
+
+        if args.emverify:
+            vclient = mcp_emverify.emverify_mcp_client(
+                solver_python=args.emverify_python, allowed_tools=args.emverify_tool)
+            stack.enter_context(vclient)
+            v_tools = vclient.list_tools_sync()
+            if not v_tools:
+                print("emverify mcp: server exposed 0 tools. --emverify-tool matches the names "
+                      "WITHOUT the 'emverify_' prefix (simulate_microstrip).", file=sys.stderr)
+                return 2
+            extra_tools.extend(v_tools)
+            print(f"emverify mcp: {len(v_tools)} tools", file=sys.stderr)
 
         tracer = ToolTracer() if args.trace_tools else None
         agent, tap = build_agent(
