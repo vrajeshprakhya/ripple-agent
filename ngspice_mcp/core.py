@@ -64,7 +64,7 @@ _VECTOR = re.compile(r"^[A-Za-z][A-Za-z0-9_.:#$]*(\([A-Za-z0-9_.:#$,+\-/]*\))?$"
 _EXPECTED_PLOT = {"op": "operating point", "dc": "dc transfer", "ac": "ac analysis", "tran": "transient"}
 _PROBLEM = re.compile(
     r"\b(error|fatal)\b|ignored!|not a valid|could not find|unknown (model|subckt|device)|no such|"
-    r"too few|too many", re.I)
+    r"too few|too many|singular matrix", re.I)  # singular: ngspice warns, then returns numbers anyway
 
 
 class SpiceError(RuntimeError):
@@ -111,9 +111,26 @@ def read_netlist_file(path: str, roots: list[Path]) -> str:
 
 
 # --- Sanitizer ---------------------------------------------------------------
+_CARD_VALUE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?[A-Za-z]*$")
+
+
 def _looks_like_element(line: str) -> bool:
-    s = line.strip()
-    return bool(s) and s[0].upper() in _ELEMENT_LETTERS and bool(_ELEMENT_CARD.match(s))
+    """Whether a first line is really a component rather than a title.
+
+    Deliberately narrow: only R, C, L, V and I cards whose fourth field is a value (or DC/AC). A
+    looser rule, any element letter followed by three words, read titles such as "Two-stage RC
+    low-pass" (T, a transmission line) and "Series RLC band-pass" (S, a switch) as components, and
+    ngspice then failed on them. The cost of narrowness: a netlist with no title whose first line is
+    a transistor or subcircuit call loses that line, as it would in ngspice itself.
+    """
+    tok = line.split()
+    if len(tok) < 4 or tok[0][0].upper() not in "RCLVI":
+        return False
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", tok[0]):
+        return False
+    if tok[0][0].upper() in "RCL":
+        return len(tok) == 4 and bool(_CARD_VALUE.match(tok[3]))
+    return bool(_CARD_VALUE.match(tok[3])) or tok[3].lower() in ("dc", "ac", "pulse", "sin", "pwl", "exp")
 
 
 def sanitize_netlist(

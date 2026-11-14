@@ -46,6 +46,27 @@ def test_first_line_that_is_a_component_is_not_swallowed_as_a_title():
     assert any("looked like a component" in n for n in notes)
 
 
+@pytest.mark.parametrize("title", [
+    "Two-stage RC low-pass",           # T is a transmission line: once read as a component
+    "Series RLC band-pass",            # S is a switch
+    "Low pass filter design",          # L would be an inductor
+    "Voltage divider example circuit",
+    "Current source with load",
+    "Resistor ladder for testing",
+])
+def test_ordinary_titles_starting_with_element_letters_stay_titles(title):
+    clean, notes = core.sanitize_netlist(f"{title}\nV1 a 0 DC 1\nR1 a 0 1k\n")
+    assert clean.splitlines()[0] == f"* {title}"
+    assert notes == []
+
+
+@pytest.mark.parametrize("first", ["R1 a b 1k", "C1 out 0 100n", "V1 in 0 DC 5", "V1 in 0 5", "I1 0 a 1m"])
+def test_a_real_first_component_is_kept(first):
+    clean, notes = core.sanitize_netlist(f"{first}\nR9 a 0 1k\n")
+    assert first in clean.splitlines()
+    assert any("looked like a component" in n for n in notes)
+
+
 def test_analysis_cards_and_end_are_stripped_not_rejected():
     clean, notes = core.sanitize_netlist(RC + ".op\n.tran 1u 1m\n.ac dec 10 1 1meg\n.dc V1 0 1 0.1\n.end\n")
     for card in (".op", ".tran", ".ac", ".dc", ".end"):
@@ -386,6 +407,14 @@ def test_a_malformed_component_is_a_failure_not_a_silent_result():
 def test_a_good_circuit_with_one_bad_part_still_fails():
     with pytest.raises(SpiceError, match="rejected"):
         _run("op", {}, [], "t\nV1 a 0 DC 1\nR1 a 0 1k\nR2 a\n")
+
+
+@needs_ngspice
+def test_an_ill_posed_circuit_is_refused_not_given_numbers():
+    # An inductor straight across an ideal source is a DC short. ngspice prints
+    # "singular matrix" as a WARNING and still returns values for it.
+    with pytest.raises(SpiceError, match="rejected"):
+        _run("op", {}, [], "t\nV1 a 0 DC 3.3\nL1 a 0 1m\nR1 a 0 1k\n")
 
 
 @needs_ngspice

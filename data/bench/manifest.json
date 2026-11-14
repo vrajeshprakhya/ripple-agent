@@ -1,0 +1,59 @@
+{
+  "created": "2026-11-13T19:50:27-08:00",
+  "seed": 7,
+  "sha256": {
+    "train": "6b6064af58e22e5949958dea81beab8d4dc4615fb570740c944f168093fe8fbf",
+    "val": "089794205f8c21afa571f101518d19bead8cfcbb42d0a615ac3ffcbc02aabb5f",
+    "test": "af0a814e6ada376c0a6fdf867544bb693944f17af5a0e1a8feadd7eaff116616"
+  },
+  "sizes": {
+    "train": 300,
+    "val": 60,
+    "test": 60
+  },
+  "test_by_category": {
+    "unseen_values": 20,
+    "out_of_range": 15,
+    "unseen_config": 15,
+    "design": 10
+  },
+  "test_by_family": {
+    "series_rlc": 17,
+    "rc_lowpass": 10,
+    "divider": 8,
+    "cr_highpass": 5,
+    "loaded_divider": 5,
+    "two_stage_rc": 5,
+    "design_lpf": 3,
+    "design_divider": 3,
+    "design_rlc": 2,
+    "fault_correction": 2
+  },
+  "train_by_family": {
+    "series_rlc": 108,
+    "divider": 92,
+    "rc_lowpass": 100
+  },
+  "train_by_kind": {
+    "peak_freq_hz": 35,
+    "op_current": 41,
+    "f3db_hz": 37,
+    "ac_phase_deg": 67,
+    "ac_gain_db": 69,
+    "op_voltage": 51
+  },
+  "rejected_during_generation": {
+    "freq_hz must be a number from 1 Hz to 1 GHz": 2
+  },
+  "ground_truth": "ngspice, required to agree with an independent MNA solver and the closed-form formula",
+  "system_prompt": "You are an expert electrical engineer. Solve the problem and reply with only the final answer in exactly the requested form, with its SI unit.",
+  "decoding": {
+    "temperature": 0.0,
+    "max_tokens": 160
+  },
+  "limits": [
+    "Train and test share the three training families' templates for unseen_values; that category tests interpolation and format, not structural generalisation.",
+    "unseen_config uses three topologies never seen in training (topology fingerprints disjoint).",
+    "design problems are a task type absent from training."
+  ]
+}

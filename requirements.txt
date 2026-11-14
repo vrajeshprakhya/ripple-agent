@@ -4,3 +4,5 @@ strands-agents-tools==0.9.0
 # Imported directly by ngspice_mcp (also a transitive dependency of strands). The v2
 # line renamed FastMCP to MCPServer, so a v1 pin would break the server.
 mcp==2.3.0
+# datagen's independent circuit solver. A range, not a pin: the CI matrix spans Python 3.11 to 3.13.
+numpy>=2.0,<3
