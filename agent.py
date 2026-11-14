@@ -21,6 +21,7 @@ import pathlib
 import sys
 
 import mcp_kicad
+import mcp_openems
 import mcp_spice
 from strands import Agent, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
@@ -37,12 +38,18 @@ KEY_FILE = pathlib.Path.home() / ".openrouter_key"
 # Left unpinned it picks for itself, so the context window and the precision you
 # get vary per call. Pin the order and keep fallbacks for availability.
 #
-# PrimeIntellect is intermittent rather than simply down: on 2026-11-13 it
-# returned a provider error on every request and then served normally a few
-# hours later. It is kept first because it is both the cheapest and a
-# 1M-context bf16 endpoint, and allow_fallbacks means an outage costs a retry
-# rather than a failure. Do not infer today's health from this comment.
-PROVIDER_ORDER = ["PrimeIntellect", "GMICloud", "Together"]
+# GMICloud goes first, and Together is left out, for two reasons found by measurement
+# on 2026-11-14 (small samples; re-check before relying on them):
+#   * PrimeIntellect intermittently ends a streamed tool call early: the stream carries
+#     finish_reason "tool_calls" while the arguments JSON is still open, so Strands logs
+#     "failed to parse tool input json, defaulting to empty dict" and the server receives {}.
+#     Against a 16-tool manifest it did this in 4 of 6 agent runs; GMICloud in 0 of 3.
+#     It did not reproduce with a one-tool request (32 of 32 valid on both providers), so the
+#     trigger is something in the larger request. Earlier it was also down for a stretch.
+#   * Together returned HTTP 404 to a request carrying tools.
+# PrimeIntellect stays as the fallback: it is half the price, so an outage on the first
+# choice costs a retry rather than a failure.
+PROVIDER_ORDER = ["GMICloud", "PrimeIntellect"]
 
 # Per-Mtok rates for the fallback cost estimate, used only when OpenRouter does
 # not report an exact cost. GMICloud and Together both charge this;
@@ -508,6 +515,18 @@ def main() -> int:
         help="narrow to these tool names, without the spice_ prefix (run_ac, not spice_run_ac)",
     )
     s.add_argument("--ngspice", metavar="PATH", help="ngspice binary (default: auto-detect)")
+    e = ap.add_argument_group("openEMS MCP server (third party, AGPL-3.0)")
+    e.add_argument(
+        "--openems",
+        metavar="DIR",
+        help="path to an installed RFingAdam/mcp-openems checkout (see mcp_openems.py)",
+    )
+    e.add_argument(
+        "--openems-tool",
+        action="append",
+        metavar="NAME",
+        help="narrow to these tool names as listed, e.g. openems_create_microstrip; repeatable",
+    )
     ap.add_argument(
         "--trace-tools",
         action="store_true",
@@ -575,6 +594,25 @@ def main() -> int:
                 return 2
             extra_tools.extend(spice_tools)
             print(f"spice mcp: {len(spice_tools)} tools", file=sys.stderr)
+
+        if args.openems:
+            try:
+                eclient = mcp_openems.openems_mcp_client(args.openems, allowed_tools=args.openems_tool)
+            except mcp_openems.OpenemsServerError as err:
+                print(f"openems mcp: {err}", file=sys.stderr)
+                return 2
+            stack.enter_context(eclient)
+            em_tools = eclient.list_tools_sync()
+            if not em_tools:
+                hint = (
+                    " --openems-tool matches the names exactly as listed (openems_create_patch)."
+                    if args.openems_tool
+                    else ""
+                )
+                print(f"openems mcp: server exposed 0 tools.{hint}", file=sys.stderr)
+                return 2
+            extra_tools.extend(em_tools)
+            print(f"openems mcp: {len(em_tools)} tools", file=sys.stderr)
 
         tracer = ToolTracer() if args.trace_tools else None
         agent, tap = build_agent(

@@ -106,11 +106,20 @@ Left unpinned, OpenRouter picks for itself, so your context window and numeric p
 vary per call. `PROVIDER_ORDER` in `agent.py` states a preference and keeps
 `allow_fallbacks` on, so an unhealthy endpoint costs a retry rather than a failure.
 
-**PrimeIntellect is intermittent.** On 2026-11-13 it returned a provider error on every
-request, then served normally a few hours later. It is kept first in the order because it
-is both the cheapest and a 1M-context bf16 endpoint, and `allow_fallbacks` turns an outage
-into a retry rather than a failure. The `via <provider>` field in the per-turn report
-tells you who actually served a given call, so do not assume.
+**The default order is now GMICloud, then PrimeIntellect, and Together is left out.**
+Two measurements (2026-11-14, small samples, worth re-checking) drove that:
+
+- **PrimeIntellect intermittently ends a streamed tool call early.** The stream carries
+  `finish_reason: "tool_calls"` while the arguments JSON is still open, so Strands logs
+  `failed to parse tool input json, defaulting to empty dict` and the server receives `{}`.
+  Against a 16-tool manifest it did this in 4 of 6 agent runs; GMICloud did it in 0 of 8. It
+  did not reproduce with a one-tool request (32 of 32 valid on both providers), so the trigger
+  is something in the larger request. None of the earlier 23 experiment logs shows it.
+- **Together returned HTTP 404 to a request carrying tools.**
+
+PrimeIntellect stays as the fallback: it is half the price, so an outage on the first choice
+costs a retry rather than a failure. It was also down entirely for a stretch on 2026-11-13.
+The `via <provider>` field in the per-turn report says who actually served a call.
 
 ## Context window
 
@@ -393,6 +402,46 @@ run at about $0.0004 to $0.0007, and **got the cell voltage (3.688 V) and the co
 right; the model divided it itself, never used its `calculate` tool, and attached the wrong
 unit. Treat a model's unit labels on derived quantities as unverified even when every number
 it was handed was correct.
+
+## openEMS MCP server (third party)
+
+`mcp_openems.py` launches [RFingAdam/mcp-openems](https://github.com/RFingAdam/mcp-openems)
+(AGPL-3.0) as a separate stdio process. Nothing from it is copied into this MIT repo.
+
+```bash
+git clone https://github.com/RFingAdam/mcp-openems ~/mcp-openems
+git -C ~/mcp-openems checkout 46ceb5d                     # the commit that was audited
+cd ~/mcp-openems && uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
+./run.sh --openems ~/mcp-openems "design a 50 ohm microstrip for 2.4 GHz on 1.6 mm FR-4"
+```
+
+Audit of `46ceb5d`, by reading the source (not by running it): no subprocess calls, no network
+calls, no install-time hooks, runtime dependencies `mcp` and `numpy` only. It writes no files and
+takes no paths, so there are no roots to configure. The script templates it *emits* create and
+delete a fixed directory under the system temp dir when someone runs them, which only matters
+once openEMS is installed.
+
+**It does analytical design and script generation only.** openEMS itself is not on PyPI or apt;
+it builds from source against HDF5, VTK and boost, with Python bindings pinned to one Python
+minor version. It is not installed here, and `openems_check_installation` says so honestly.
+
+Its 16 tools cost about 2.3k tokens per turn. Checked against independent physics rather than
+taken on trust: its microstrip impedance matches Hammerstad-Jensen to within 1% across four
+substrates (epsilon_r 3.38 to 10.2), and its effective permittivity, wavelength, electrical
+length and delay are mutually consistent. Five runs of "find the width that gives 50 ohms on
+1.6 mm FR-4 at 2.4 GHz", through Ripple 65B on the default provider order, all converged:
+3.17 mm at the tool's default epsilon_r of 4.2 (my reference: 3.18 mm) in three runs, and
+3.065 mm at epsilon_r 4.4 in two, which is also correct for that permittivity. One of those
+said "4.4, as specified" though no permittivity was specified.
+
+### What is not here
+
+**`mcp-pcb-emcopilot`** was the intended companion, and is not integrated. The author's
+repository returns 404 (listings call it private), and the only public copy is under a different
+account (`Yverr0y/mcp-pcb-emcopilot`) whose provenance cannot be verified from git alone. Reading
+it turned up an `eval()` in its Gerber parser (`gerber_parser.py:127`) running on text from the
+file with empty `__builtins__`, which is a known-escapable pattern and a real concern for files
+that come from outside. Nothing from it was installed or run.
 
 ## Caveats
 
