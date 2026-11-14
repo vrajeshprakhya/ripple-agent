@@ -106,10 +106,11 @@ Left unpinned, OpenRouter picks for itself, so your context window and numeric p
 vary per call. `PROVIDER_ORDER` in `agent.py` states a preference and keeps
 `allow_fallbacks` on, so an unhealthy endpoint costs a retry rather than a failure.
 
-**Known issue:** as of 2026-11-13, PrimeIntellect returns a provider error on every
-request, so GMICloud or Together serves these calls in practice. PrimeIntellect is kept
-first in the order because it is both the cheapest and a 1M-context bf16 endpoint when it
-recovers.
+**PrimeIntellect is intermittent.** On 2026-11-13 it returned a provider error on every
+request, then served normally a few hours later. It is kept first in the order because it
+is both the cheapest and a 1M-context bf16 endpoint, and `allow_fallbacks` turns an outage
+into a retry rather than a failure. The `via <provider>` field in the per-turn report
+tells you who actually served a given call, so do not assume.
 
 ## Context window
 
@@ -125,10 +126,12 @@ long sessions stay bounded in both context and cost.
 ./.venv/bin/python -m pytest tests -q
 ```
 
-40 tests, entirely offline: no network and no API key, so they cost nothing and run in
-CI on every push. They cover sandbox escape refusal (including via symlink), calculator
-safety, key-loading precedence and the usage-reporting fallback. The live model path is
-deliberately not tested in CI, because a key in CI would mean every push spends credit.
+83 tests, entirely offline: no network, no API key, no KiCad, no Node, no MCP server, so
+they cost nothing and run in CI on every push. They cover sandbox escape refusal
+(including via symlink), calculator safety, key-loading precedence, the usage-reporting
+fallback, the KiCad server validation and mode handling, and the tool tracer. The live
+model path is deliberately not tested in CI, because a key in CI would mean every push
+spends credit.
 
 ## KiCad MCP server
 
@@ -175,6 +178,30 @@ also namespaced with a `kicad` prefix so a generic name cannot collide with a lo
 The server directory is validated eagerly, before the agent or the API key are touched,
 because the alternative is an opaque stdio timeout 90 seconds later. An unbuilt checkout
 is told to run `npm run build`; a wrong directory is told what `--kicad` expects.
+
+### Measuring it
+
+`--trace-tools` reports the manifest size and every tool the model actually chose:
+
+```
+manifest: 4 tools, 1216 chars (~304 tokens re-sent per turn)
+tool calls (3):
+  1. list_directory {'path': '.'}
+  2. read_text_file {'path': 'run.sh'}
+  3. calculate {'expression': '2*21'}
+```
+
+That measurement is the point rather than a debugging aid. At roughly 300 characters per
+simple tool, a 37-tool `core` manifest should cost a few thousand input tokens per turn,
+and the full 184-plus manifest tens of thousands, on every single call. KiCad's schemas
+are richer than these four, so treat those as floors.
+
+`demo/kicad_bms_demo.sh` is a staged capability probe: it asks the agent to enumerate its
+KiCad tools, create a project, place parts from the official symbol libraries, wire a
+single-cell protection circuit, and run ERC. Each stage is a fresh agent so one derailing
+cannot poison the next, and it refuses to run in any path matching `bq_vboard`,
+`bms_vboard` or `_evidence`. It is a measurement of where the model succeeds and fails,
+not a way to produce a design worth fabricating.
 
 ## Caveats
 

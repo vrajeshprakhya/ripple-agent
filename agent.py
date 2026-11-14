@@ -36,10 +36,11 @@ KEY_FILE = pathlib.Path.home() / ".openrouter_key"
 # Left unpinned it picks for itself, so the context window and the precision you
 # get vary per call. Pin the order and keep fallbacks for availability.
 #
-# As of 2026-11-13 PrimeIntellect returns a provider error on every request, so
-# in practice GMICloud or Together serves these calls. PrimeIntellect is kept
-# first because it is both the cheapest and a 1M-context bf16 endpoint when
-# healthy; allow_fallbacks means its being down costs a retry, not a failure.
+# PrimeIntellect is intermittent rather than simply down: on 2026-11-13 it
+# returned a provider error on every request and then served normally a few
+# hours later. It is kept first because it is both the cheapest and a
+# 1M-context bf16 endpoint, and allow_fallbacks means an outage costs a retry
+# rather than a failure. Do not infer today's health from this comment.
 PROVIDER_ORDER = ["PrimeIntellect", "GMICloud", "Together"]
 
 # Per-Mtok rates for the fallback cost estimate, used only when OpenRouter does
@@ -215,6 +216,83 @@ class UsageTap:
                 self.cost = u_extra["cost"]
 
 
+class ToolTracer:
+    """Records which tools the model chose, and the manifest it chose from.
+
+    The point of this is measurement rather than debugging. With a large MCP
+    server attached, the two things worth knowing are whether the model picks
+    the right tool out of a manifest that size, and what carrying the manifest
+    costs per turn, since every schema is re-sent as input on every call.
+
+    Installing a callback handler replaces the default one, which is what
+    prints streamed text, so this echoes `data` deltas to keep that behaviour.
+    """
+
+    def __init__(self, echo: bool = True) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.manifest: list | None = None
+        self.echo = echo
+        self._seen: set[str] = set()
+
+    def __call__(self, **kw) -> None:
+        if self.echo:
+            data = kw.get("data")
+            if data:
+                print(data, end="", flush=True)
+
+        if self.manifest is None:
+            config = kw.get("tool_config")
+            if config:
+                self.manifest = _manifest_tools(config)
+
+        message = kw.get("message")
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            for block in message.get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                use = block.get("toolUse")
+                # The same message is emitted more than once per turn, so
+                # dedupe on the id rather than counting a call twice.
+                if use and use.get("name") and use.get("toolUseId") not in self._seen:
+                    self._seen.add(use.get("toolUseId"))
+                    self.calls.append((use["name"], use.get("input")))
+
+    def summary(self) -> str:
+        lines = []
+        if self.manifest is not None:
+            import json
+
+            size = len(json.dumps(self.manifest, default=str))
+            # Schema JSON tokenizes at roughly 4 characters per token; this is
+            # an order-of-magnitude figure, not an accounting one.
+            lines.append(
+                f"manifest: {len(self.manifest)} tools, {size} chars "
+                f"(~{size // 4} tokens re-sent per turn)"
+            )
+        if self.calls:
+            lines.append(f"tool calls ({len(self.calls)}):")
+            for i, (name, args) in enumerate(self.calls, 1):
+                rendered = str(args)
+                if len(rendered) > 120:
+                    rendered = rendered[:117] + "..."
+                lines.append(f"  {i}. {name} {rendered}")
+        else:
+            lines.append("tool calls: none")
+        return "\n".join(lines)
+
+
+def _manifest_tools(config) -> list:
+    """Pull the tool list out of a tool_config of whichever shape."""
+    if isinstance(config, dict):
+        for key in ("tools", "toolSpecs", "tool_specs"):
+            if isinstance(config.get(key), list):
+                return config[key]
+        return [config]
+    if isinstance(config, list):
+        return config
+    return []
+
+
 def instrumented_client(api_key: str, tap: UsageTap):
     """An AsyncOpenAI client that tees streamed chunks through `tap`.
 
@@ -270,6 +348,7 @@ def build_agent(
     provider_order=None,
     window: int = DEFAULT_WINDOW,
     extra_tools=None,
+    tracer: ToolTracer | None = None,
 ) -> tuple[Agent, UsageTap]:
     # `usage.include` is what makes OpenRouter report an exact cost; both it and
     # provider routing are OpenRouter body fields rather than OpenAI inference
@@ -291,11 +370,17 @@ def build_agent(
     )
     tools = [list_directory, read_text_file, calculate, current_time] if use_tools else []
     tools += list(extra_tools or [])
+    kwargs = {}
+    if tracer is not None:
+        # Only override the default handler when tracing, since doing so is
+        # what takes over printing the streamed output.
+        kwargs["callback_handler"] = tracer
     agent = Agent(
         model=model,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
         conversation_manager=SlidingWindowConversationManager(window_size=window),
+        **kwargs,
     )
     return agent, tap
 
@@ -369,6 +454,11 @@ def main() -> int:
         help="narrow to these tool names, client side; repeatable",
     )
     g.add_argument("--node", default="node", help="node binary to launch the server with")
+    ap.add_argument(
+        "--trace-tools",
+        action="store_true",
+        help="report the tool manifest size and every tool the model chose",
+    )
     args = ap.parse_args()
 
     order = [] if args.any_provider else args.provider
@@ -396,6 +486,7 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+        tracer = ToolTracer() if args.trace_tools else None
         agent, tap = build_agent(
             use_tools=not args.no_tools,
             max_tokens=args.max_tokens,
@@ -403,10 +494,13 @@ def main() -> int:
             provider_order=order,
             window=args.window,
             extra_tools=extra_tools,
+            tracer=tracer,
         )
 
         if args.prompt:
             report(agent(" ".join(args.prompt)), tap)
+            if tracer:
+                print("\n" + tracer.summary(), file=sys.stderr)
             return 0
 
         print(f"Ripple 65B via OpenRouter, sandbox root {SANDBOX_ROOT}")
@@ -423,6 +517,8 @@ def main() -> int:
                 continue
             try:
                 report(agent(line), tap)
+                if tracer:
+                    print(tracer.summary(), file=sys.stderr)
             except Exception as e:
                 print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
             print()
