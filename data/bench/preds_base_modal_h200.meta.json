@@ -1,0 +1,11 @@
+{
+  "model": "ripple-base",
+  "base_url": "https://vrajeshprakhya--ripple-serve-serve-base-h200.us-east.modal.run/v1",
+  "system_prompt": "You are an expert electrical engineer. Solve the problem and reply with only the final answer in exactly the requested form, with its SI unit.",
+  "decoding": {
+    "temperature": 0.0,
+    "max_tokens": 8192
+  },
+  "tools": "none",
+  "openrouter_provider_pin": false
+}

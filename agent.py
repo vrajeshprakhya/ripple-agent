@@ -29,9 +29,11 @@ from strands import Agent, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models.openai import OpenAIModel
 
-MODEL_ID = "ricursiveai/ripple-65b-preview"
-BASE_URL = "https://openrouter.ai/api/v1"
-KEY_FILE = pathlib.Path.home() / ".openrouter_key"
+# Defaults are OpenRouter. Set RIPPLE_BASE_URL / RIPPLE_MODEL / RIPPLE_KEY_FILE to point the agent at
+# another OpenAI-compatible endpoint, e.g. the Modal SGLang server with the fine-tuned weights.
+MODEL_ID = os.environ.get("RIPPLE_MODEL", "ricursiveai/ripple-65b-preview")
+BASE_URL = os.environ.get("RIPPLE_BASE_URL", "https://openrouter.ai/api/v1")
+KEY_FILE = pathlib.Path(os.environ.get("RIPPLE_KEY_FILE", str(pathlib.Path.home() / ".openrouter_key"))).expanduser()
 
 # OpenRouter load-balances across three endpoints with materially different specs:
 #   PrimeIntellect  1,048,576 ctx  $0.10/$0.30 per Mtok  bf16
