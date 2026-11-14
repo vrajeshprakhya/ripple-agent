@@ -60,6 +60,28 @@ rather than guessing: if a question is about a file or directory, read it first.
 State plainly when a tool returns an error or when something is outside the
 sandbox root, and never invent file contents you did not read."""
 
+MCP_ADDENDUM = """
+
+You also have tools supplied by an attached MCP server. Their names carry a
+prefix. They are NOT covered by the sandbox rule above, which restricts only your
+local file tools, so a path that your file tools refuse may be perfectly valid
+for them. When a task is about something those tools operate on, use them rather
+than asking the user to paste files. Before concluding that a capability does not
+exist, look for it: if a tool for searching or listing tools is available, call
+it, and report what it returned."""
+
+
+def compose_system_prompt(has_mcp_tools: bool) -> str:
+    """The base prompt, plus a description of the MCP tools when there are any.
+
+    The base prompt says the agent has filesystem and arithmetic tools. Once an
+    MCP server is attached that is no longer true, and a model told it has only
+    those tools will say so, including in front of a manifest that lists dozens
+    more.
+    """
+    return SYSTEM_PROMPT + (MCP_ADDENDUM if has_mcp_tools else "")
+
+
 # --- Sandbox --------------------------------------------------------------
 # File tools are confined to SANDBOX_ROOT so the agent cannot wander the disk.
 SANDBOX_ROOT = pathlib.Path(
@@ -378,7 +400,7 @@ def build_agent(
     agent = Agent(
         model=model,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=compose_system_prompt(bool(extra_tools)),
         conversation_manager=SlidingWindowConversationManager(window_size=window),
         **kwargs,
     )
@@ -486,6 +508,17 @@ def main() -> int:
                 return 2
             stack.enter_context(client)
             kicad_tools = client.list_tools_sync()
+            if not kicad_tools:
+                # An empty manifest is never what was wanted, and the agent would
+                # otherwise carry on and truthfully report that it has no tools.
+                hint = (
+                    " --kicad-tool matches the server's own tool names WITHOUT the "
+                    "'kicad_' prefix (run_erc, not kicad_run_erc)."
+                    if args.kicad_tool
+                    else ""
+                )
+                print(f"kicad mcp: server exposed 0 tools.{hint}", file=sys.stderr)
+                return 2
             extra_tools.extend(kicad_tools)
             print(
                 f"kicad mcp: {len(kicad_tools)} tools "

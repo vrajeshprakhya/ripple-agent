@@ -213,18 +213,44 @@ Ripple 65B, `write` / `core`, KiCad 9.0.8, server v2.9.0. Whole probe cost about
 | 1. Enumerate tools | Answered |
 | 2. Create project | **Worked**: one `kicad_create_project` call wrote the four project files |
 | 3. Place 5 library parts | **Worked**: 5 `kicad_add_schematic_component` calls, correct nested arguments, designators BAT1/R1/T1/Q1/C1, all five symbols present in the file |
-| 4. Wire the circuit | **Failed**: made no tool call, and claimed the project path was outside its sandbox. It was the sandbox root, and stage 3 used the same path successfully |
-| 5. Run ERC | Reported that no ERC tool exists in `core`. The tracer recorded no calls, though, so the claim that it searched for one is unverified |
+| 4. Wire the circuit | **Failed, reproducibly** (4 runs): no tool call, claiming the path is outside its sandbox or that it has no tools. Wiring tools do exist in `core` |
+| 5. Run ERC | **Failed on `core`, worked on a narrow manifest** (see below) |
 
-Two findings that are about the server rather than the model:
+**The server writes KiCad 10 format** (`version 20260101`, `generator_version "10.0"`,
+hardcoded in `python/commands/schematic.py`), so KiCad 9.0.8 reports `Failed to load
+schematic`. Use KiCad 10 with this server. With 10.0.8 installed the same file loads.
 
-- **The schematic is written in KiCad 10 format** (`version 20260101`,
-  `generator_version "10.0"`, hardcoded in `python/commands/schematic.py`), so KiCad 9.0.8
-  reports `Failed to load schematic`. Use KiCad 10 with this server, or patch that header.
-- **The schematic had zero wires**, so nothing was connected even where it loaded.
+### Follow-up experiments
 
-The stage 4 refusal is a plausible side effect of this repo's own system prompt, which
-leans hard on "outside the sandbox root". That is a hypothesis; it has not been tested.
+Stage 4 and 5 were re-run with the system prompt corrected (it had claimed the agent
+only had filesystem and arithmetic tools, which stopped being true once an MCP server
+attached; `compose_system_prompt` now describes MCP tools and exempts them from the
+sandbox rule) and then with a narrow manifest.
+
+| Run | Stage 4 (wiring) | Stage 5 (ERC) |
+|---|---|---|
+| `core`, 37 tools, original prompt | refused | refused, no tool call |
+| `core`, 37 tools, corrected prompt | refused | refused, no tool call |
+| 5 and 2 tools (relevant only) | refused | **worked** |
+
+The ERC run called `list_directory` then `kicad_run_erc` with correct arguments and
+reported 17 violations. An independent `kicad-cli sch erc` run on the same file also
+reports 17, so the result is real.
+
+What this does and does not show:
+
+- **Manifest size matters for ERC.** `kicad_run_erc` lives only in the `all` toolbox, so
+  `core` genuinely lacks it. The model did not call `kicad_search_tools` or
+  `kicad_open_toolbox` to find it, but used it as soon as it was in front of it.
+- **The wiring refusal is not about tools or sandbox.** It persists with 5 relevant tools
+  and with a prompt that exempts MCP tools from the sandbox, and in the same run the model
+  used `list_directory` on that very path for ERC. Cause unknown: the request may simply
+  be underspecified for this model (no pin numbers or net names).
+- Small samples throughout. This is an anecdote, not a benchmark.
+
+`--kicad-tool` matches the server's own tool names **without** the `kicad_` prefix
+(`run_erc`, not `kicad_run_erc`). A filter matching nothing now exits with an error
+rather than running an agent that truthfully reports having no tools.
 
 `demo/kicad_bms_demo.sh` is a staged capability probe: it asks the agent to enumerate its
 KiCad tools, create a project, place parts from the official symbol libraries, wire a

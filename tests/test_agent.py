@@ -219,3 +219,20 @@ def test_report_falls_back_to_estimate():
     line = A.format_report({"inputTokens": 1_000_000, "outputTokens": 0, "totalTokens": 1_000_000}, tap)
     assert "<=$0.200000 est" in line  # RATE_IN on a full Mtok
     assert "via" not in line
+
+
+# --- System prompt composition -------------------------------------------
+def test_base_prompt_unchanged_without_mcp_tools():
+    assert A.compose_system_prompt(False) == A.SYSTEM_PROMPT
+    assert "MCP" not in A.compose_system_prompt(False)
+
+
+def test_prompt_describes_mcp_tools_when_attached():
+    p = A.compose_system_prompt(True)
+    assert p.startswith(A.SYSTEM_PROMPT)
+    assert "MCP server" in p
+
+
+def test_addendum_exempts_mcp_tools_from_the_sandbox_rule():
+    # A model told only about its sandbox applied it to tools it does not cover.
+    assert "NOT covered by the sandbox" in A.compose_system_prompt(True)
