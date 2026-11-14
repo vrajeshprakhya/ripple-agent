@@ -33,6 +33,12 @@ DEFAULT_KICAD_PYTHONPATH = "/usr/lib/kicad/lib/python3/dist-packages"
 OPERATING_MODES = ("readonly", "manufacturing", "write")
 DEFAULT_MODE = "readonly"
 DEFAULT_TOOLBOXES = "core"
+
+# The server logs a line per registered tool group at info level, all to stderr,
+# which buries the agent's own per-turn cost line. These are the values its
+# config.ts accepts; anything else it rejects at startup.
+LOG_LEVELS = ("error", "warn", "info", "debug")
+DEFAULT_LOG_LEVEL = "warn"
 DEFAULT_PREFIX = "kicad"
 
 # The server builds an index and probes KiCad on startup, which is slower than
@@ -71,13 +77,17 @@ def kicad_server_env(
     toolboxes: str = DEFAULT_TOOLBOXES,
     mode: str = DEFAULT_MODE,
     pythonpath: str | None = None,
-    log_level: str = "info",
+    log_level: str = DEFAULT_LOG_LEVEL,
     kicad_python: str | None = None,
 ) -> dict[str, str]:
-    """Build the server's environment, refusing an unknown operating mode."""
+    """Build the server's environment, refusing an unknown mode or log level."""
     if mode not in OPERATING_MODES:
         raise KicadServerError(
             f"unknown operating mode {mode!r}; expected one of {', '.join(OPERATING_MODES)}"
+        )
+    if log_level not in LOG_LEVELS:
+        raise KicadServerError(
+            f"unknown log level {log_level!r}; expected one of {', '.join(LOG_LEVELS)}"
         )
     env = {
         "KICAD_MCP_OPERATING_MODE": mode,
@@ -98,6 +108,7 @@ def kicad_mcp_client(
     mode: str = DEFAULT_MODE,
     pythonpath: str | None = None,
     kicad_python: str | None = None,
+    log_level: str = DEFAULT_LOG_LEVEL,
     allowed_tools: Iterable[str] | None = None,
     startup_timeout: int = DEFAULT_STARTUP_TIMEOUT,
     prefix: str | None = DEFAULT_PREFIX,
@@ -114,6 +125,7 @@ def kicad_mcp_client(
         mode=mode,
         pythonpath=pythonpath,
         kicad_python=kicad_python,
+        log_level=log_level,
     )
 
     def transport():

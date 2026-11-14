@@ -174,3 +174,21 @@ def test_transport_launches_the_built_entry_point(built_server, monkeypatch):
     assert params.args == [str(built_server / "dist" / "index.js")]
     assert params.env["KICAD_MCP_OPERATING_MODE"] == "readonly"
     assert params.cwd == str(built_server)
+
+
+# --- Log level ------------------------------------------------------------
+def test_default_log_level_is_quiet():
+    assert K.kicad_server_env()["KICAD_MCP_LOG_LEVEL"] == "warn"
+
+
+@pytest.mark.parametrize("level", K.LOG_LEVELS)
+def test_every_documented_log_level_is_accepted(level):
+    assert K.kicad_server_env(log_level=level)["KICAD_MCP_LOG_LEVEL"] == level
+
+
+@pytest.mark.parametrize("level", ["", "warning", "INFO", "trace", "verbose"])
+def test_unknown_log_level_is_refused(level):
+    # The server rejects these at startup; failing here is a clear message
+    # instead of a dead stdio pipe.
+    with pytest.raises(K.KicadServerError, match="unknown log level"):
+        K.kicad_server_env(log_level=level)

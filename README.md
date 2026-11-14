@@ -169,11 +169,21 @@ schematic files. Readonly is the default here and widening it is an explicit fla
 mode that is not exactly one of the three documented spellings raises rather than
 falling back, so a typo cannot silently widen access.
 
-**`--kicad-toolboxes core`,** roughly 37 tools. The full server advertises between 184
-and 253 depending on which part of its README you read. That is a bad fit for a 65B
-model: tool-selection accuracy degrades well before that count, and every schema is
-re-sent as input on every turn, which the 131k Together endpoint would feel. Tools are
-also namespaced with a `kicad` prefix so a generic name cannot collide with a local one.
+**`--kicad-toolboxes core`.** The server's own README gives three different tool counts
+(253, 244, 184). Measured against the running v2.9.0 server, the manifest is:
+
+| Mode / toolbox | Tools | Manifest, per turn |
+|---|---|---|
+| readonly / core (default) | 14 | ~1.5k tokens |
+| write / core | 37 | ~6.6k tokens |
+| readonly / all | 86 | ~17k tokens |
+| write / all | 250 | ~66.6k tokens |
+
+The manifest is re-sent as input on every call, so the full write manifest would eat half
+of the 131k Together endpoint's window before the conversation starts. `core` is the
+default for that reason. The server can also unlock groups at runtime
+(`kicad_open_toolbox`), and the tracer saw the count grow from 37 to 41 mid-session. Tools
+are namespaced with a `kicad` prefix so a generic name cannot collide with a local one.
 
 The server directory is validated eagerly, before the agent or the API key are touched,
 because the alternative is an opaque stdio timeout 90 seconds later. An unbuilt checkout
@@ -191,10 +201,30 @@ tool calls (3):
   3. calculate {'expression': '2*21'}
 ```
 
-That measurement is the point rather than a debugging aid. At roughly 300 characters per
-simple tool, a 37-tool `core` manifest should cost a few thousand input tokens per turn,
-and the full 184-plus manifest tens of thousands, on every single call. KiCad's schemas
-are richer than these four, so treat those as floors.
+That measurement is the point rather than a debugging aid. The four local tools cost about
+300 tokens. KiCad's richer schemas cost about 180 tokens per tool (see the table above).
+
+### Probe results (2026-11-13, one run, so anecdote rather than benchmark)
+
+Ripple 65B, `write` / `core`, KiCad 9.0.8, server v2.9.0. Whole probe cost about $0.002.
+
+| Stage | Outcome |
+|---|---|
+| 1. Enumerate tools | Answered |
+| 2. Create project | **Worked**: one `kicad_create_project` call wrote the four project files |
+| 3. Place 5 library parts | **Worked**: 5 `kicad_add_schematic_component` calls, correct nested arguments, designators BAT1/R1/T1/Q1/C1, all five symbols present in the file |
+| 4. Wire the circuit | **Failed**: made no tool call, and claimed the project path was outside its sandbox. It was the sandbox root, and stage 3 used the same path successfully |
+| 5. Run ERC | Reported that no ERC tool exists in `core`. The tracer recorded no calls, though, so the claim that it searched for one is unverified |
+
+Two findings that are about the server rather than the model:
+
+- **The schematic is written in KiCad 10 format** (`version 20260101`,
+  `generator_version "10.0"`, hardcoded in `python/commands/schematic.py`), so KiCad 9.0.8
+  reports `Failed to load schematic`. Use KiCad 10 with this server, or patch that header.
+- **The schematic had zero wires**, so nothing was connected even where it loaded.
+
+The stage 4 refusal is a plausible side effect of this repo's own system prompt, which
+leans hard on "outside the sandbox root". That is a hypothesis; it has not been tested.
 
 `demo/kicad_bms_demo.sh` is a staged capability probe: it asks the agent to enumerate its
 KiCad tools, create a project, place parts from the official symbol libraries, wire a

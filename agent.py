@@ -453,6 +453,12 @@ def main() -> int:
         metavar="NAME",
         help="narrow to these tool names, client side; repeatable",
     )
+    g.add_argument(
+        "--kicad-log-level",
+        default=mcp_kicad.DEFAULT_LOG_LEVEL,
+        choices=mcp_kicad.LOG_LEVELS,
+        help="server log verbosity; info prints a line per tool group to stderr",
+    )
     g.add_argument("--node", default="node", help="node binary to launch the server with")
     ap.add_argument(
         "--trace-tools",
@@ -472,6 +478,7 @@ def main() -> int:
                     node=args.node,
                     mode=args.kicad_mode,
                     toolboxes=args.kicad_toolboxes,
+                    log_level=args.kicad_log_level,
                     allowed_tools=args.kicad_tool,
                 )
             except mcp_kicad.KicadServerError as e:
