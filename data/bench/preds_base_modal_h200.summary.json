@@ -1,0 +1,70 @@
+{
+  "overall": {
+    "n": 60,
+    "truncated": 0,
+    "transport_errors": 10,
+    "valid": 50,
+    "strict_format": 50,
+    "correct_within_tolerance": 49,
+    "correct_tight": 40,
+    "median_rel_error": 1.8813131313712981e-06,
+    "median_abs_error_db_deg": 0.0018403606294658537,
+    "median_completion_tokens": 1744.0,
+    "design_success": 9,
+    "design_constraint_ok": 10,
+    "design_n": 10
+  },
+  "by_category": {
+    "design": {
+      "n": 10,
+      "truncated": 0,
+      "transport_errors": 0,
+      "valid": 10,
+      "strict_format": 10,
+      "correct_within_tolerance": 9,
+      "correct_tight": 0,
+      "median_rel_error": null,
+      "median_abs_error_db_deg": null,
+      "median_completion_tokens": 534.5,
+      "design_success": 9,
+      "design_constraint_ok": 10,
+      "design_n": 10
+    },
+    "out_of_range": {
+      "n": 15,
+      "truncated": 0,
+      "transport_errors": 1,
+      "valid": 14,
+      "strict_format": 14,
+      "correct_within_tolerance": 14,
+      "correct_tight": 14,
+      "median_rel_error": 2.5926767672377896e-07,
+      "median_abs_error_db_deg": 0.001695558671048758,
+      "median_completion_tokens": 3663.0
+    },
+    "unseen_config": {
+      "n": 15,
+      "truncated": 0,
+      "transport_errors": 5,
+      "valid": 10,
+      "strict_format": 10,
+      "correct_within_tolerance": 10,
+      "correct_tight": 10,
+      "median_rel_error": 2.3831548198923183e-06,
+      "median_abs_error_db_deg": 0.0009438910526142763,
+      "median_completion_tokens": 1787.0
+    },
+    "unseen_values": {
+      "n": 20,
+      "truncated": 0,
+      "transport_errors": 4,
+      "valid": 16,
+      "strict_format": 16,
+      "correct_within_tolerance": 16,
+      "correct_tight": 16,
+      "median_rel_error": 6.74668764136273e-06,
+      "median_abs_error_db_deg": 0.0030671470073784235,
+      "median_completion_tokens": 2199.0
+    }
+  }
+}
