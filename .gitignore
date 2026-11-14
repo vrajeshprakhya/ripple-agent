@@ -1,0 +1,16 @@
+# Virtualenv
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Secrets: the OpenRouter key lives in $HOME, never in the tree.
+# These patterns are belt-and-braces in case one is ever copied here.
+.openrouter_key
+*.key
+.env
+.env.*
