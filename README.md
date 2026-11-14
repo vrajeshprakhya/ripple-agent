@@ -130,6 +130,52 @@ CI on every push. They cover sandbox escape refusal (including via symlink), cal
 safety, key-loading precedence and the usage-reporting fallback. The live model path is
 deliberately not tested in CI, because a key in CI would mean every push spends credit.
 
+## KiCad MCP server
+
+`mcp_kicad.py` wires in [mixelpixx/KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server),
+a Node process speaking MCP over stdio that drives KiCad through its `pcbnew`
+Python bindings, with an experimental IPC backend.
+
+It has prerequisites this repo cannot install for you:
+
+| Needs | Why |
+|---|---|
+| KiCad 9.0+ with `pcbnew` | The server's whole backend. Verify with `python3 -c "import pcbnew; print(pcbnew.GetBuildVersion())"` |
+| Node.js 18+ | The server is TypeScript, built with `npm run build` |
+| Python 3.9+ and its `requirements.txt` | The server's Python side |
+
+```bash
+git clone --branch stable https://github.com/mixelpixx/KiCAD-MCP-Server.git
+cd KiCAD-MCP-Server && npm install && pip3 install -r requirements.txt && npm run build
+```
+
+Then:
+
+```bash
+./run.sh --kicad ~/KiCAD-MCP-Server "what layers does this board use?"
+./run.sh --kicad ~/KiCAD-MCP-Server --kicad-toolboxes all        # the full manifest
+./run.sh --kicad ~/KiCAD-MCP-Server --kicad-mode write           # lets the model edit designs
+./run.sh --kicad ~/KiCAD-MCP-Server --kicad-tool get_board_info  # narrow, client side
+```
+
+### Two defaults chosen deliberately
+
+**`--kicad-mode readonly`.** The server's `KICAD_MCP_OPERATING_MODE` also accepts
+`manufacturing` and `write`, either of which lets the model mutate real PCB and
+schematic files. Readonly is the default here and widening it is an explicit flag. A
+mode that is not exactly one of the three documented spellings raises rather than
+falling back, so a typo cannot silently widen access.
+
+**`--kicad-toolboxes core`,** roughly 37 tools. The full server advertises between 184
+and 253 depending on which part of its README you read. That is a bad fit for a 65B
+model: tool-selection accuracy degrades well before that count, and every schema is
+re-sent as input on every turn, which the 131k Together endpoint would feel. Tools are
+also namespaced with a `kicad` prefix so a generic name cannot collide with a local one.
+
+The server directory is validated eagerly, before the agent or the API key are touched,
+because the alternative is an opaque stdio timeout 90 seconds later. An unbuilt checkout
+is told to run `npm run build`; a wrong directory is told what `--kicad` expects.
+
 ## Caveats
 
 OpenRouter warns that OpenAI-compatible endpoints can deviate from the spec in places.

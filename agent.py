@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import datetime as _dt
 import operator
 import os
 import pathlib
 import sys
 
+import mcp_kicad
 from strands import Agent, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models.openai import OpenAIModel
@@ -267,6 +269,7 @@ def build_agent(
     temperature: float = 0.3,
     provider_order=None,
     window: int = DEFAULT_WINDOW,
+    extra_tools=None,
 ) -> tuple[Agent, UsageTap]:
     # `usage.include` is what makes OpenRouter report an exact cost; both it and
     # provider routing are OpenRouter body fields rather than OpenAI inference
@@ -287,6 +290,7 @@ def build_agent(
         },
     )
     tools = [list_directory, read_text_file, calculate, current_time] if use_tools else []
+    tools += list(extra_tools or [])
     agent = Agent(
         model=model,
         tools=tools,
@@ -341,38 +345,87 @@ def main() -> int:
         action="store_true",
         help="let OpenRouter route freely instead of pinning",
     )
+    g = ap.add_argument_group("KiCad MCP server")
+    g.add_argument(
+        "--kicad",
+        metavar="DIR",
+        help="path to a built mixelpixx/KiCAD-MCP-Server checkout",
+    )
+    g.add_argument(
+        "--kicad-mode",
+        default=mcp_kicad.DEFAULT_MODE,
+        choices=mcp_kicad.OPERATING_MODES,
+        help="anything but readonly lets the model modify real design files",
+    )
+    g.add_argument(
+        "--kicad-toolboxes",
+        default=mcp_kicad.DEFAULT_TOOLBOXES,
+        help="server-side tool groups; 'core' is ~37 tools, 'all' is 184+",
+    )
+    g.add_argument(
+        "--kicad-tool",
+        action="append",
+        metavar="NAME",
+        help="narrow to these tool names, client side; repeatable",
+    )
+    g.add_argument("--node", default="node", help="node binary to launch the server with")
     args = ap.parse_args()
 
     order = [] if args.any_provider else args.provider
-    agent, tap = build_agent(
-        use_tools=not args.no_tools,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        provider_order=order,
-        window=args.window,
-    )
 
-    if args.prompt:
-        report(agent(" ".join(args.prompt)), tap)
-        return 0
+    with contextlib.ExitStack() as stack:
+        extra_tools = []
+        if args.kicad:
+            try:
+                client = mcp_kicad.kicad_mcp_client(
+                    args.kicad,
+                    node=args.node,
+                    mode=args.kicad_mode,
+                    toolboxes=args.kicad_toolboxes,
+                    allowed_tools=args.kicad_tool,
+                )
+            except mcp_kicad.KicadServerError as e:
+                print(f"kicad mcp: {e}", file=sys.stderr)
+                return 2
+            stack.enter_context(client)
+            kicad_tools = client.list_tools_sync()
+            extra_tools.extend(kicad_tools)
+            print(
+                f"kicad mcp: {len(kicad_tools)} tools "
+                f"(mode={args.kicad_mode}, toolboxes={args.kicad_toolboxes})",
+                file=sys.stderr,
+            )
 
-    print(f"Ripple 65B via OpenRouter, sandbox root {SANDBOX_ROOT}")
-    print("Ctrl-D or 'exit' to quit. Conversation state persists across turns.\n")
-    while True:
-        try:
-            line = input(">>> ").strip()
-        except (EOFError, KeyboardInterrupt):
+        agent, tap = build_agent(
+            use_tools=not args.no_tools,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            provider_order=order,
+            window=args.window,
+            extra_tools=extra_tools,
+        )
+
+        if args.prompt:
+            report(agent(" ".join(args.prompt)), tap)
+            return 0
+
+        print(f"Ripple 65B via OpenRouter, sandbox root {SANDBOX_ROOT}")
+        print("Ctrl-D or 'exit' to quit. Conversation state persists across turns.\n")
+        while True:
+            try:
+                line = input(">>> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if line in {"exit", "quit"}:
+                return 0
+            if not line:
+                continue
+            try:
+                report(agent(line), tap)
+            except Exception as e:
+                print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
             print()
-            return 0
-        if line in {"exit", "quit"}:
-            return 0
-        if not line:
-            continue
-        try:
-            report(agent(line), tap)
-        except Exception as e:
-            print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
-        print()
 
 
 if __name__ == "__main__":
