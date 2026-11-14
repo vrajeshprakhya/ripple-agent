@@ -147,10 +147,12 @@ def test_the_board_counts_match_an_independent_parse(live):
     assert len(d["vias"]) == 10 if isinstance(d["vias"], list) else d["vias"] == 10
     # the server counts KiCad's unconnected pseudo-net (net 0, empty name); 24 named + that one
     assert (len(d["nets"]) if isinstance(d["nets"], list) else d["nets"]) == 25
-    # The stackup is right: four copper layers, counted independently of the server's headline figure.
+    # The stackup is right: four physical copper layers. Its list holds the board's layer table
+    # (typed signal/power/user) and then the physical stack (typed copper/prepreg/core), so filter
+    # on the type, not the name, which appears in both.
     _, s = call(live, "pcb_get_stackup", session_id=d["session_id"])
-    copper = [layer for layer in s["layers"] if layer["name"].endswith(".Cu")]
-    assert len(copper) == 4
+    copper = [layer for layer in s["layers"] if layer["type"] == "copper"]
+    assert [layer["name"] for layer in copper] == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
     # Known quirk of the third-party tool, pinned so it is noticed if it changes: the headline
     # layer_count is 5 on this 4-copper-layer board, so use the stackup for the real number.
     assert d["layer_count"] == 5
