@@ -1,8 +1,10 @@
 # ripple-agent
 
+[![tests](https://github.com/vrajeshprakhya/ripple-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/vrajeshprakhya/ripple-agent/actions/workflows/ci.yml)
+
 A [Strands Agents](https://strandsagents.com) agent powered by **Ripple 65B Preview**
 (`ricursiveai/ripple-65b-preview`) through the [OpenRouter](https://openrouter.ai) API,
-with a small sandboxed toolset.
+with a sandboxed toolset and exact per-turn cost reporting.
 
 ## Why the OpenAI provider
 
@@ -25,7 +27,7 @@ agent = Agent(model=model, tools=[...], system_prompt=SYSTEM_PROMPT)
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/python -m pip install 'strands-agents[openai]' strands-agents-tools
+./.venv/bin/python -m pip install -r requirements.txt
 ```
 
 Supply an OpenRouter key either way round:
@@ -37,7 +39,7 @@ umask 077 && printf '%s' 'sk-or-v1-...' > ~/.openrouter_key
 ```
 
 Create a key at <https://openrouter.ai/keys>. Ripple 65B has no free endpoint, so the
-account needs credit on it. A typical tool-using turn costs well under a cent.
+account needs credit on it. A tool-using turn typically costs under a hundredth of a cent.
 
 ## Usage
 
@@ -47,9 +49,14 @@ account needs credit on it. A typical tool-using turn costs well under a cent.
 ./run.sh --no-tools "hello"              # plain completion, no tool loop
 ./run.sh --provider GMICloud "hello"     # pin one provider (repeatable, order matters)
 ./run.sh --any-provider "hello"          # let OpenRouter route freely
+./run.sh --window 10 "hello"             # keep only the last 10 turns in context
 ```
 
-Token usage and an upper-bound cost print to stderr after each turn.
+After each turn a line like this goes to stderr:
+
+```
+[tokens in=1339 out=163 total=1502  $0.000089 via GMICloud]
+```
 
 ## Tools
 
@@ -61,7 +68,29 @@ Token usage and an upper-bound cost print to stderr after each turn.
 | `current_time` | Local time, ISO 8601 |
 
 The two filesystem tools are confined to a sandbox root, the working directory by
-default, overridable with `RIPPLE_AGENT_ROOT`. Paths resolving outside it are refused.
+default, overridable with `RIPPLE_AGENT_ROOT`. Containment is checked against the
+**resolved** path, so `..` traversal, absolute paths and symlinks pointing outside the
+root are all refused rather than merely discouraged.
+
+`calculate` walks an AST and permits numbers and arithmetic operators only: no names,
+calls, subscripts or comprehensions. It also refuses exponents above 1024, since
+`9**9**9` is cheap to write and would otherwise hang the agent inside a C-level loop.
+
+## Cost reporting
+
+Strands normalizes the model's usage payload down to token counts and discards
+everything else, so neither `AgentResult` nor a `callback_handler` ever sees
+OpenRouter's own `provider` and `cost` fields. Setting `usage: {"include": true}` in
+`extra_body` makes OpenRouter report an exact cost, and a thin wrapper around the
+OpenAI client tees the streamed chunks to read it back. `OpenAIModel` accepts a
+pre-built client for exactly this purpose, which its docstring describes as
+"centralizing observability".
+
+This matters more than it sounds. Estimating cost from token counts and headline rates
+overstated a real turn by **4x**, because prompt caching discounts cached input tokens
+by roughly an order of magnitude and the token counts alone cannot show that. If the tee
+ever stops working after an upstream upgrade, the line falls back to a token-based
+estimate labelled `<=$... est` rather than failing.
 
 ## Provider routing
 
@@ -78,18 +107,37 @@ vary per call. `PROVIDER_ORDER` in `agent.py` states a preference and keeps
 `allow_fallbacks` on, so an unhealthy endpoint costs a retry rather than a failure.
 
 **Known issue:** as of 2026-11-13, PrimeIntellect returns a provider error on every
-request, so GMICloud serves these calls in practice. PrimeIntellect is kept first in the
-order because it is both the cheapest and a 1M-context bf16 endpoint when it recovers.
+request, so GMICloud or Together serves these calls in practice. PrimeIntellect is kept
+first in the order because it is both the cheapest and a 1M-context bf16 endpoint when it
+recovers.
 
-The cost figure printed after each turn is an **upper bound**: Strands does not surface
-which provider served a call, so it assumes the dearer rate. The raw OpenRouter response
-carries an exact `cost` field, which Strands discards.
+## Context window
+
+Ripple's window is large, but an unbounded REPL will still walk into it, and every
+retained turn is re-billed as input on the next call. A
+`SlidingWindowConversationManager` keeps the last `--window` turns (40 by default), so
+long sessions stay bounded in both context and cost.
+
+## Tests
+
+```bash
+./.venv/bin/python -m pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest tests -q
+```
+
+40 tests, entirely offline: no network and no API key, so they cost nothing and run in
+CI on every push. They cover sandbox escape refusal (including via symlink), calculator
+safety, key-loading precedence and the usage-reporting fallback. The live model path is
+deliberately not tested in CI, because a key in CI would mean every push spends credit.
 
 ## Caveats
 
 OpenRouter warns that OpenAI-compatible endpoints can deviate from the spec in places.
 Tool calling is verified working here (Ripple 65B has native tool calling), but other
 features may behave differently than they would against OpenAI directly.
+
+The client wrapper that recovers exact cost reaches past the public API, since no public
+hook exposes unmodelled response fields. It is written to degrade rather than break.
 
 ## Licence
 
