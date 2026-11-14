@@ -236,3 +236,9 @@ def test_prompt_describes_mcp_tools_when_attached():
 def test_addendum_exempts_mcp_tools_from_the_sandbox_rule():
     # A model told only about its sandbox applied it to tools it does not cover.
     assert "NOT covered by the sandbox" in A.compose_system_prompt(True)
+
+
+def test_addendum_asks_for_units_and_unit_aware_arithmetic():
+    p = A.compose_system_prompt(True)
+    assert "SI unit" in p and "unit-aware" in p
+    assert "SI unit" not in A.compose_system_prompt(False)

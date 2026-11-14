@@ -69,7 +69,12 @@ local file tools, so a path that your file tools refuse may be perfectly valid
 for them. When a task is about something those tools operate on, use them rather
 than asking the user to paste files. Before concluding that a capability does not
 exist, look for it: if a tool for searching or listing tools is available, call
-it, and report what it returned."""
+it, and report what it returned.
+
+State every physical quantity with its SI unit. Do not do arithmetic on quantities
+in your head: if a unit-aware calculation tool is available, use it, because slips
+in prefixes (milli versus base units) are easy to make and invisible. For example
+volts divided by ohms is amperes."""
 
 
 def compose_system_prompt(has_mcp_tools: bool) -> str:

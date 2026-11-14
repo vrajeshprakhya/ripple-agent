@@ -176,6 +176,105 @@ def test_giving_both_or_neither_netlist_form_is_an_error(live):
 
 
 @needs_ngspice
+def test_compute_is_exposed_and_gets_the_shunt_current_right(live):
+    client, _ = live
+    assert "spice_compute" in {t.tool_name for t in client.list_tools_sync()}
+    status, text = _call(client, "compute", expression="1.00002 mV / 1 mohm")
+    assert status == "success", text
+    r = _json(text)
+    assert r["unit"] == "A" and r["display"] == "1.00002 A"
+
+
+@needs_ngspice
+@pytest.mark.parametrize("name,args", [
+    ("run_ac", {"start_hz": "1", "stop_hz": "1k", "netlist": RC}),
+    ("run_transient", {"step": "1u", "stop": "100u", "netlist": RC}),
+    ("run_dc_sweep", {"source": "V1", "start": "0", "stop": "1", "step": "0.5", "netlist": RC}),
+])
+def test_sweeps_without_probes_are_refused_not_dumped(live, name, args):
+    # On a real board this used to return every one of 99 vectors: 144 KB from one call.
+    client, _ = live
+    status, text = _call(client, name, **args)
+    assert status == "error" and "name the vectors" in text and len(text) < 400
+
+
+@needs_ngspice
+def test_too_many_probes_are_refused(live):
+    client, _ = live
+    status, text = _call(client, "run_ac", start_hz="1", stop_hz="1k", netlist=RC,
+                         probes=[f"v(n{i})" for i in range(13)])
+    assert status == "error" and "at most 12" in text
+
+
+@needs_ngspice
+def test_compute_reads_values_from_a_run_op_result_with_units_attached(live):
+    client, _ = live
+    net = "board\nVS in 0 DC 5\nR1 in sense 100\nRSH sense 0 0.5\n"  # 10 mA... 5/100.5 A through 0.5 ohm
+    _, text = _call(client, "run_op", netlist=net)
+    rid = _json(text)["result_id"]
+    status, text = _call(client, "compute", expression="v(sense) / 0.5 ohm", result_id=rid)
+    assert status == "success", text
+    r = _json(text)
+    assert r["unit"] == "A" and r["value_si"] == pytest.approx(5 / 100.5, rel=1e-4)
+    assert r["display"].endswith("mA")  # 49.75 mA, stated with its unit rather than a bare number
+
+
+@needs_ngspice
+def test_compute_resolves_a_differential_reference(live):
+    client, _ = live
+    net = "d\nVS in 0 DC 5\nR1 in mid 1k\nR2 mid 0 1k\n"
+    rid = _json(_call(client, "run_op", netlist=net)[1])["result_id"]
+    status, text = _call(client, "compute", expression="v(in,mid) / 1 kohm", result_id=rid)
+    assert status == "success", text
+    assert _json(text)["value_si"] == pytest.approx(2.5e-3)
+
+
+@needs_ngspice
+def test_compute_refuses_a_vector_without_a_result(live):
+    client, _ = live
+    status, text = _call(client, "compute", expression="v(out) / 1 kohm")
+    assert status == "error" and "needs a result_id" in text
+
+
+@needs_ngspice
+def test_compute_refuses_references_into_a_non_operating_point_result(live):
+    client, _ = live
+    rid = _json(_call(client, "run_transient", step="1u", stop="10u", probes=["v(out)"], netlist=RC)[1])["result_id"]
+    status, text = _call(client, "compute", expression="v(out) / 1 kohm", result_id=rid)
+    assert status == "error" and "operating-point" in text
+
+
+@needs_ngspice
+def test_compute_refuses_an_unknown_vector(live):
+    client, _ = live
+    rid = _json(_call(client, "run_op", netlist="d\nV1 a 0 DC 1\nR1 a 0 1k\n")[1])["result_id"]
+    status, text = _call(client, "compute", expression="v(nope) / 1 kohm", result_id=rid)
+    assert status == "error" and "no vector" in text
+
+
+@needs_ngspice
+def test_compute_refuses_unlike_quantities_with_a_readable_reason(live):
+    client, _ = live
+    status, text = _call(client, "compute", expression="1 V + 1 A")
+    assert status == "error" and "cannot combine" in text
+
+
+@needs_ngspice
+def test_every_analysis_result_states_its_units(live):
+    client, root = live
+    for name, args in [
+        ("run_op", {"netlist": "d\nV1 in 0 DC 5\nR1 in 0 1k\n"}),
+        ("run_ac", {"start_hz": "1", "stop_hz": "1k", "probes": ["v(out)"], "netlist": RC}),
+        ("run_transient", {"step": "1u", "stop": "100u", "probes": ["v(out)"], "netlist": RC}),
+        ("run_dc_sweep", {"source": "V1", "start": "0", "stop": "1", "step": "0.5", "probes": ["v(in)"],
+                          "netlist": "d\nV1 in 0 DC 0\nR1 in 0 1k\n"}),
+    ]:
+        status, text = _call(client, name, **args)
+        assert status == "success", (name, text)
+        assert "SI base units" in _json(text)["units"], name
+
+
+@needs_ngspice
 def test_unknown_result_id_is_a_clear_error(live):
     client, _ = live
     status, text = _call(client, "measure", result_id="nope", kind="rms", vector="v(out)")

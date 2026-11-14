@@ -75,6 +75,24 @@ def _circuit(netlist: str | None, netlist_path: str | None) -> tuple[str, list[s
     return core.sanitize_netlist(netlist or "", roots=roots(), base_dir=base)
 
 
+MAX_PROBES = 12
+
+
+def _need_probes(probes: list[str] | None) -> list[str]:
+    """Sweeps must name what they return.
+
+    With no probes ngspice writes every vector, and on a real board that is 99 of them: a
+    144 KB response, around 36k tokens, from a single call. An operating point is the one
+    analysis where the whole picture is wanted, so it alone is exempt.
+    """
+    if not probes:
+        raise SpiceError("name the vectors to return with probes, for example ['v(out)'] or a "
+                         "differential ['v(a,b)']. Run run_op first to see every node name.")
+    if len(probes) > MAX_PROBES:
+        raise SpiceError(f"at most {MAX_PROBES} probes per run, got {len(probes)}")
+    return probes
+
+
 def _store(result: core.RunResult) -> str:
     rid = uuid.uuid4().hex[:8]
     _RESULTS[rid] = result
@@ -105,6 +123,42 @@ def _vector_for(r: core.RunResult, vector: str) -> list:
     return r.vectors[key]
 
 
+UNIT_NOTE = ("every value is in SI base units: v(...) in volts, i(...) in amperes, time in seconds, "
+             "frequency in hertz. 0.001 in a v() vector is one millivolt, not one volt.")
+
+
+@_tool
+def compute(expression: str, result_id: str | None = None) -> dict:
+    """Unit-aware arithmetic. Use this for ANY derived quantity instead of calculating in your head.
+
+    Write each quantity as a number plus a unit: "1.00002 mV / 1 mohm" gives 1.00002 A (volts divided
+    by ohms is amperes whatever the prefixes). Units: V A ohm W F H Hz s S, prefixes p n u m k M G.
+    Adding unlike quantities (V + A) is refused, which catches mistakes.
+
+    Pass the result_id of a run_op to read node values directly, so you never retype digits or guess
+    a unit: compute("(v(/srp) - v(/srn)) / 1 mohm", result_id=...) returns the shunt current with its
+    unit already attached. v(...) is in volts and i(...) in amperes. Use the "display" field.
+    """
+    from . import units
+
+    resolve = None
+    if result_id:
+        r = _get(result_id)
+        if r.analysis != "op":
+            raise SpiceError("vector references need an operating-point (run_op) result")
+
+        def resolve(name: str) -> float:
+            if name in r.vectors:
+                return _real(r.vectors[name][0])
+            if name.startswith("v(") and "," in name:  # v(a,b) is v(a) - v(b)
+                a, b = name[2:-1].split(",", 1)
+                if f"v({a})" in r.vectors and f"v({b})" in r.vectors:
+                    return _real(r.vectors[f"v({a})"][0]) - _real(r.vectors[f"v({b})"][0])
+            raise SpiceError(f"no vector {name!r} in that result")
+
+    return units.compute(expression, resolve)
+
+
 @_tool
 def check_netlist(netlist: str | None = None, netlist_path: str | None = None) -> dict:
     """Validate a netlist without simulating it. Reports what would be stripped and why a netlist is refused."""
@@ -118,7 +172,7 @@ def run_op(netlist: str | None = None, netlist_path: str | None = None) -> dict:
     clean, notes = _circuit(netlist, netlist_path)
     r = core.run_ngspice(clean, "op", {}, [])
     values = {k: _real(v[0]) for k, v in r.vectors.items()}
-    return {"result_id": _store(r), "values": values, "notes": notes + r.notes}
+    return {"result_id": _store(r), "values": values, "units": UNIT_NOTE, "notes": notes + r.notes}
 
 
 @_tool
@@ -128,12 +182,12 @@ def run_dc_sweep(source: str, start: str, stop: str, step: str, probes: list[str
     """Sweep an independent source (for example V1) from start to stop. Numbers use SPICE suffixes (10k, 1m)."""
     clean, notes = _circuit(netlist, netlist_path)
     r = core.run_ngspice(clean, "dc", {"source": source, "start": start, "stop": stop, "step": step},
-                         probes or [])
+                         _need_probes(probes))
     sname, xs = _scale(r)
     table = {name: [(x, _real(y)) for x, y in core.downsample(xs, r.vectors[name], max_points)]
              for name in r.vectors if name != sname}
     return {"result_id": _store(r), "sweep": sname, "points": len(xs), "table": table,
-            "notes": notes + r.notes}
+            "units": UNIT_NOTE, "notes": notes + r.notes}
 
 
 @_tool
@@ -145,7 +199,7 @@ def run_ac(start_hz: str, stop_hz: str, points_per_decade: int = 20, probes: lis
 
     clean, notes = _circuit(netlist, netlist_path)
     r = core.run_ngspice(clean, "ac", {"start": start_hz, "stop": stop_hz,
-                                       "points_per_decade": points_per_decade}, probes or [])
+                                       "points_per_decade": points_per_decade}, _need_probes(probes))
     _, freqs = _scale(r)
     out, bw = {}, {}
     for name, series in r.vectors.items():
@@ -157,7 +211,7 @@ def run_ac(start_hz: str, stop_hz: str, points_per_decade: int = 20, probes: lis
         out[name] = [{"hz": f, "db": round(m, 3), "deg": round(p, 2)} for f, (m, p) in rows]
         bw[name] = core.bandwidth_3db(freqs, mags)
     return {"result_id": _store(r), "points": len(freqs), "table": out, "bandwidth_3db_hz": bw,
-            "notes": notes + r.notes}
+            "units": UNIT_NOTE, "notes": notes + r.notes}
 
 
 @_tool
@@ -167,7 +221,7 @@ def run_transient(step: str, stop: str, probes: list[str] | None = None, max_ste
     """Transient simulation. Returns per-probe statistics and a downsampled waveform."""
     clean, notes = _circuit(netlist, netlist_path)
     r = core.run_ngspice(clean, "tran", {"step": step, "stop": stop, "max_step": max_step or ""},
-                         probes or [])
+                         _need_probes(probes))
     sname, ts = _scale(r)
     out, st = {}, {}
     for name, series in r.vectors.items():
@@ -177,7 +231,7 @@ def run_transient(step: str, stop: str, probes: list[str] | None = None, max_ste
         st[name] = core.stats(ys)
         out[name] = [(t, y) for t, y in core.downsample(ts, ys, max_points)]
     return {"result_id": _store(r), "points": len(ts), "end_time": ts[-1], "stats": st, "waveform": out,
-            "notes": notes + r.notes}
+            "units": UNIT_NOTE, "notes": notes + r.notes}
 
 
 @_tool
